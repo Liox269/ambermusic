@@ -1,10 +1,10 @@
-name: Compilar AmberMusic v1.4.1
+name: Compilar AmberMusic v1.4.2
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'AmberMusic_v1.4.1_Minimal_Source.zip'
+      - 'AmberMusic_v1.4.2_Compact_Source.zip'
       - '.github/workflows/build-apk.yml'
 
 permissions:
@@ -52,12 +52,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ ! -f AmberMusic_v1.4.1_Minimal_Source.zip ]; then
-            echo "::error::Falta AmberMusic_v1.4.1_Minimal_Source.zip en la raíz del repositorio. Súbelo mediante Add file → Upload files."
+          if [ ! -f AmberMusic_v1.4.2_Compact_Source.zip ]; then
+            echo "::error::Falta AmberMusic_v1.4.2_Compact_Source.zip en la raíz del repositorio. Súbelo mediante Add file → Upload files."
             ls -lah
             exit 1
           fi
-          unzip -q AmberMusic_v1.4.1_Minimal_Source.zip -d workspace
+          unzip -q AmberMusic_v1.4.2_Compact_Source.zip -d workspace
           PROJECT_SETTINGS="$(find workspace -name settings.gradle.kts -type f -print -quit)"
           if [ -z "$PROJECT_SETTINGS" ]; then
             echo "::error::No se encontró settings.gradle.kts dentro del ZIP."
@@ -78,12 +78,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cp "$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk" AmberMusic-v1.4.1-debug.apk
+          cp "$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk" AmberMusic-v1.4.2-debug.apk
 
       - name: Publicar APK
         uses: actions/upload-artifact@v4
         with:
-          name: AmberMusic-v1.4.1-APK
-          path: AmberMusic-v1.4.1-debug.apk
+          name: AmberMusic-v1.4.2-APK
+          path: AmberMusic-v1.4.2-debug.apk
           if-no-files-found: error
           retention-days: 30
