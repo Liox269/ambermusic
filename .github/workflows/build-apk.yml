@@ -1,0 +1,46 @@
+name: Compilar AmberMusic v1.3.0
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'AmberMusic_v1.3.0_Source.zip'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Obtener archivos
+        uses: actions/checkout@v4
+      - name: Preparar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Preparar Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Instalar plataformas
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager 'platforms;android-37' 'build-tools;36.0.0' 'platform-tools'
+      - name: Preparar Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+      - name: Extraer codigo
+        run: unzip -q AmberMusic_v1.3.0_Source.zip -d workspace
+      - name: Compilar APK
+        working-directory: workspace/AmberMusic-Completo
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: Renombrar APK
+        run: cp workspace/AmberMusic-Completo/app/build/outputs/apk/debug/app-debug.apk AmberMusic-v1.3.0-debug.apk
+      - name: Guardar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AmberMusic-v1.3.0-APK
+          path: AmberMusic-v1.3.0-debug.apk
+          retention-days: 30
