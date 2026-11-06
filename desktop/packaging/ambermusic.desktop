@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=AmberMusic
+Comment=Reproductor de música local
+Exec=ambermusic
+Icon=ambermusic
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;Player;
+MimeType=audio/mpeg;audio/flac;audio/ogg;audio/wav;audio/mp4;
+Keywords=music;audio;player;
