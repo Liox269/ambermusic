@@ -17,6 +17,7 @@ data class AmberPalette(
 
 object AmberPalettes {
     val all = listOf(
+        AmberPalette("coral", "AmberMusic Coral", Color(0xFFFF6B73), Color(0xFFFF9AA0), Color(0xFF121017), Color(0xFF211B24), Color(0xFFB8AFBE)),
         AmberPalette("blue", "Azul nocturno", Color(0xFF87C6FF), Color(0xFF7FADCE), Color(0xFF0B1626), Color(0xFF14263B), Color(0xFFABC1D6)),
         AmberPalette("aigis", "Aigis rosa", Color(0xFFFFB1CB), Color(0xFFE39CB4), Color(0xFF230E1B), Color(0xFF3B1C2E), Color(0xFFF0C1CF)),
         AmberPalette("violet", "Violeta noche", Color(0xFFC4ABFF), Color(0xFFB59ADF), Color(0xFF191229), Color(0xFF29203C), Color(0xFFCDBCE5)),

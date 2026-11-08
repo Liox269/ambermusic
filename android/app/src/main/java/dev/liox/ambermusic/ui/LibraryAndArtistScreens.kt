@@ -290,6 +290,7 @@ fun LibraryAndArtistScreens(
                     onClick = { viewModel.playFromAlbum(activeAlbum, it) })
             }
             else -> {
+                LibraryFeatureStrip(playing.song?.title, state.favoriteSongs.size, state.playlists.size, onOpenPlayer)
                 ScrollableTabRow(
                     selectedTabIndex = selectedTab, edgePadding = 12.dp,
                     containerColor = bg, contentColor = gold,
@@ -534,6 +535,41 @@ fun LibraryAndArtistScreens(
     if (newCategoryDialog) {
         CategoryCreateDialog(onDismiss = { newCategoryDialog = false },
             onConfirm = { viewModel.createCategory(it); newCategoryDialog = false })
+    }
+}
+
+
+@Composable
+private fun LibraryFeatureStrip(
+    currentTitle: String?,
+    favorites: Int,
+    playlists: Int,
+    openPlayer: () -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Column(
+            Modifier.weight(1.3f).clip(RoundedCornerShape(22.dp))
+                .background(LocalAmberPalette.current.surfaceRaised)
+                .clickable(enabled = currentTitle != null, onClick = openPlayer)
+                .padding(15.dp)
+        ) {
+            Text("AHORA SONANDO", color = gold, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
+            Text(currentTitle ?: "Tu música, a tu ritmo", color = Color.White,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+        }
+        Column(
+            Modifier.weight(0.8f).clip(RoundedCornerShape(22.dp))
+                .background(LocalAmberPalette.current.surface).padding(15.dp)
+        ) {
+            Text("TU MÚSICA", color = gold, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
+            Text("$favorites favoritos", color = Color.White, fontSize = 12.sp)
+            Text("$playlists listas", color = secondary, fontSize = 12.sp)
+        }
     }
 }
 

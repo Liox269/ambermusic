@@ -199,6 +199,13 @@ fun ExtrasScreen(
             3 -> DuplicatesPanel(library, viewModel)
             5 -> DuplicatesPanel(library, viewModel)
             4 -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                item { Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(LocalAmberPalette.current.surfaceRaised).padding(20.dp)) {
+                    Text("AmberMusic", color = accent, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Tu música. A tu manera.", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 23.sp)
+                    Spacer(Modifier.height(5.dp))
+                    Text("Apariencia, audio y biblioteca en un solo lugar", color = LocalAmberPalette.current.muted, fontSize = 13.sp)
+                } }
                 item { Text("Personaliza tu música sin menús interminables", color = Color.LightGray, fontSize = 13.sp, modifier = Modifier.padding(vertical = 18.dp)) }
                 item { SettingsEntry("Biblioteca y carpetas", "Carpetas permitidas y actualizar música", Icons.Filled.FolderOpen, accent) { tab = 6 } }
                 item { SettingsEntry("Duplicados", "Analizar, ocultar y mostrar copias", Icons.Filled.ContentCopy, accent) { tab = 5 } }

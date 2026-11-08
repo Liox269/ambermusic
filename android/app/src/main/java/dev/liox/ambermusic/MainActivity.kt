@@ -91,11 +91,7 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
         )
-        // Ask the device for its fastest 120 Hz-compatible mode. HyperOS keeps final control.
-        val availableRates = display?.supportedModes?.map { it.refreshRate }.orEmpty()
-        val requestedRate = availableRates.filter { it <= 120.5f }.maxOrNull()
-            ?: availableRates.maxOrNull() ?: 60f
-        window.attributes = window.attributes.apply { preferredRefreshRate = requestedRate }
+        // Keep the refresh rate adaptive to avoid unnecessary battery drain.
         setContent {
             val originalType = Typography()
             val appType = originalType.copy(

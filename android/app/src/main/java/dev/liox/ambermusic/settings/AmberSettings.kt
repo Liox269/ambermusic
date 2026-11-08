@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 /** Small settings store: no network, no polling and no database migration. */
 class AmberSettings(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("amber_settings", Context.MODE_PRIVATE)
-    private val _theme = MutableStateFlow(dev.liox.ambermusic.ui.AmberPalettes.fromId(prefs.getString("theme", "blue") ?: "blue").id)
+    private val _theme = MutableStateFlow(dev.liox.ambermusic.ui.AmberPalettes.fromId(prefs.getString("theme", "coral") ?: "coral").id)
     private val _offload = MutableStateFlow(prefs.getBoolean("offload", false))
     val theme: StateFlow<String> = _theme
     val offload: StateFlow<Boolean> = _offload

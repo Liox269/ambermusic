@@ -442,7 +442,13 @@ fun NowPlayingScreen(
                     )
                 }
             }
-            Spacer(Modifier.weight(0.32f))
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PlayerShortcut("Letras", Modifier.weight(1f)) { showLyrics = true }
+                PlayerShortcut("Cola", Modifier.weight(1f)) { showQueue = true }
+                PlayerShortcut("Temporizador", Modifier.weight(1f)) { showTimer = true }
+            }
+            Spacer(Modifier.weight(0.15f))
             Row(
                 Modifier.fillMaxWidth().height(68.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -653,6 +659,18 @@ fun NowPlayingScreen(
                 TextButton(onClick = { showRoute = false }) { Text("Cerrar", color = Color.White) }
             }
         )
+    }
+}
+
+
+@Composable
+private fun PlayerShortcut(title: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(modifier.clip(RoundedCornerShape(18.dp))
+        .background(LocalAmberPalette.current.surfaceRaised)
+        .clickable(onClick = onClick)
+        .padding(horizontal = 7.dp, vertical = 13.dp),
+        contentAlignment = Alignment.Center) {
+        Text(title, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
