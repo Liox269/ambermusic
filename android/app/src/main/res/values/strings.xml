@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Amber Music</string>
+    <string name="app_name">AmberMusic</string>
     <string name="playback_channel_name">Reproducción de música</string>
+    <string name="donation_url">https://www.paypal.com/donate/</string>
 </resources>

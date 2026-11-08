@@ -15,8 +15,11 @@ import dev.liox.ambermusic.lyrics.LyricsRepository
 import dev.liox.ambermusic.lyrics.LyricLine
 import dev.liox.ambermusic.backup.LibraryBackup
 import dev.liox.ambermusic.settings.AmberSettings
+import dev.liox.ambermusic.profiles.ProfileStore
 import dev.liox.ambermusic.artwork.ArtworkRepository
 import android.net.Uri
+import dev.liox.ambermusic.playlists.M3uCodec
+import dev.liox.ambermusic.playlists.LocalTrackPath
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -46,13 +49,22 @@ class MusicViewModel(
     private val backup: LibraryBackup,
     private val artwork: ArtworkRepository,
     private val smartStore: SmartPlaylistStore,
-    private val duplicateFinder: DuplicateFinder
+    private val duplicateFinder: DuplicateFinder,
+    private val profiles: ProfileStore
 ) : ViewModel() {
     val smartPlaylists = smartStore.rules
     val hiddenDuplicates: StateFlow<Set<String>> = settings.hiddenDuplicateUris
 
     val replayGain = settings.replayGain
     val smoothTransition = settings.smoothTransition
+    val crossfadeSeconds = settings.crossfadeSeconds
+    val performanceProfile = settings.performanceProfile
+    val restoreSession = settings.restoreSession
+    val previousBehavior = settings.previousBehavior
+    fun setRestoreSession(value: Boolean) = settings.setRestoreSession(value)
+    fun setPreviousBehavior(value: String) = settings.setPreviousBehavior(value)
+    fun setCrossfadeSeconds(value: Int) = settings.setCrossfadeSeconds(value)
+    fun setPerformanceProfile(value: String) = settings.setPerformanceProfile(value)
     val immersive = settings.immersive
     private val _duplicateGroups = MutableStateFlow<List<List<SongEntity>>>(emptyList())
     val duplicateGroups: StateFlow<List<List<SongEntity>>> = _duplicateGroups
@@ -96,7 +108,7 @@ class MusicViewModel(
         )
     }
 
-    val libraryUiState: StateFlow<LibraryUiState> = combine(
+    private val baseLibraryUiState = combine(
         libraryData, scanRunning, scanMessage, scanned, hiddenDuplicates
     ) { base, running, message, hasScanned, hidden ->
         val songs = base.songs.filterNot { it.contentUri in hidden }
@@ -114,9 +126,30 @@ class MusicViewModel(
             },
             scanning = running, message = message, scanned = hasScanned
         )
+    }
+
+    val libraryUiState: StateFlow<LibraryUiState> = combine(
+        baseLibraryUiState, profiles.active, profiles.favoriteUris
+    ) { state, profile, favoriteUris ->
+        if (profile.id == "default") state else state.copy(
+            favoriteSongs = state.songs.filter { it.contentUri in favoriteUris }
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LibraryUiState())
 
     val theme = settings.theme
+    val visualStyle = settings.visualStyle
+    val density = settings.density
+    val reduceMotion = settings.reduceMotion
+    val fitCover = settings.fitCover
+    val currentRoute = playbackConnection.currentAudioRoute
+    val autoOutputProfiles = settings.autoOutputProfiles
+    val routePresets = settings.routePresets
+    fun setAutoOutputProfiles(value: Boolean) = settings.setAutoOutputProfiles(value)
+    fun setRouteReplayGain(name: String, mode: String) = settings.setRouteReplayGain(name, mode)
+    fun setVisualStyle(value: String) = settings.setVisualStyle(value)
+    fun setDensity(value: String) = settings.setDensity(value)
+    fun setReduceMotion(value: Boolean) = settings.setReduceMotion(value)
+    fun setFitCover(value: Boolean) = settings.setFitCover(value)
     val offload = settings.offload
     val queueIds = playbackConnection.queueIds
     val audioSessionId = playbackConnection.audioSessionId
@@ -151,9 +184,10 @@ class MusicViewModel(
     }
 
     val playerUiState: StateFlow<PlayerUiState> = combine(
-        playerBase, dao.observeFavoriteIds()
-    ) { base, favorites ->
-        base.copy(isFavorite = base.song?.id in favorites)
+        playerBase, dao.observeFavoriteIds(), profiles.active, profiles.favoriteUris
+    ) { base, favorites, profile, profileFavorites ->
+        base.copy(isFavorite = if (profile.id == "default") base.song?.id in favorites
+            else base.song?.contentUri in profileFavorites)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PlayerUiState())
 
     val error: StateFlow<String?> = playbackConnection.error
@@ -270,18 +304,39 @@ class MusicViewModel(
     fun toggleShuffle() { playbackConnection.toggleShuffle() }
     fun toggleRepeat() { playbackConnection.toggleRepeat() }
 
+    fun addManyToPlaylists(songIds: Set<Long>, playlistIds: Set<Long>) =
+        viewModelScope.launch(Dispatchers.IO) {
+            for (playlistId in playlistIds) {
+                for (songId in songIds) {
+                    if (dao.getSong(songId)?.isVisible == true) {
+                        dao.appendSongToPlaylist(playlistId, songId)
+                    }
+                }
+            }
+        }
+
+    fun favoriteMany(songIds: Set<Long>) = viewModelScope.launch(Dispatchers.IO) {
+        if (profiles.active.value.id == "default") {
+            songIds.forEach { id -> if (dao.getSong(id)?.isVisible == true) dao.setFavorite(id, true) }
+        } else profiles.addFavorites(songIds.mapNotNull { dao.getSong(it)?.takeIf { song -> song.isVisible }?.contentUri }.toSet())
+    }
+
     fun toggleFavorite(songId: Long) {
         viewModelScope.launch(Dispatchers.IO) {
-            val favorite = dao.getUserState(songId)?.isFavorite ?: false
-            dao.setFavorite(songId, !favorite)
+            if (profiles.active.value.id == "default") {
+                val favorite = dao.getUserState(songId)?.isFavorite ?: false
+                dao.setFavorite(songId, !favorite)
+            } else dao.getSong(songId)?.let { profiles.toggleFavorite(it.contentUri) }
         }
     }
 
     fun toggleFavorite() {
         val current = playerUiState.value.song ?: return
         viewModelScope.launch(Dispatchers.IO) {
-            val favorite = dao.getUserState(current.id)?.isFavorite ?: false
-            dao.setFavorite(current.id, !favorite)
+            if (profiles.active.value.id == "default") {
+                val favorite = dao.getUserState(current.id)?.isFavorite ?: false
+                dao.setFavorite(current.id, !favorite)
+            } else profiles.toggleFavorite(current.contentUri)
         }
     }
 
@@ -404,6 +459,54 @@ class MusicViewModel(
         val name = withContext(Dispatchers.IO) { dao.observePlaylists().first().firstOrNull { it.id == playlistId }?.name } ?: "Playlist"
         play(list, songId, name)
     }
+
+    /** SAF handles reading and writing. The VM processes text off the UI thread. */
+    fun importM3uText(text: String, onDone: (String) -> Unit) = viewModelScope.launch {
+        try {
+            val result = withContext(Dispatchers.IO) {
+                val entries = M3uCodec.parse(text)
+                val library = dao.observeSongs().first()
+                val tracks = library.map { LocalTrackPath(it.id, it.folderPath, it.displayName, it.title, it.durationMs) }
+                val matched = M3uCodec.match(entries, tracks)
+                val name = "Importada ${System.currentTimeMillis()}"
+                val playlistId = dao.createPlaylist(name)
+                for (id in matched.matchedIds) dao.appendSongToPlaylist(playlistId, id)
+                matched
+            }
+            onDone("Importadas ${result.matchedIds.size} canciones; " +
+                "faltan ${result.missing.size}, ambiguas ${result.ambiguous.size}.")
+        } catch (error: Exception) {
+            onDone("Error M3U8: ${error.localizedMessage ?: "archivo no válido"}")
+        }
+    }
+
+    suspend fun exportPlaylistM3u(playlistId: Long): String = withContext(Dispatchers.IO) {
+        val songs = dao.observePlaylistSongsOrdered(playlistId).first()
+        M3uCodec.export(songs.map {
+            LocalTrackPath(it.id, it.folderPath, it.displayName, it.title, it.durationMs)
+        })
+    }
+
+    fun saveCurrentQueueAsPlaylist(name: String, onDone: (String) -> Unit) = viewModelScope.launch {
+        try {
+            val ids = playbackConnection.queueIds.value
+            val saved = withContext(Dispatchers.IO) {
+                val playlistId = dao.createPlaylist(name)
+                for (id in ids.distinct()) {
+                    if (dao.getSong(id)?.isVisible == true) dao.appendSongToPlaylist(playlistId, id)
+                }
+                ids.size
+            }
+            onDone("Cola guardada: $saved canciones")
+        } catch (error: Exception) {
+            onDone(error.localizedMessage ?: "No se pudo guardar la cola")
+        }
+    }
+
+    val namedQueues = playbackConnection.namedQueueNames
+    fun saveNamedQueue(name: String) { playbackConnection.saveNamedQueue(name) }
+    fun restoreNamedQueue(name: String) { playbackConnection.restoreNamedQueue(name) }
+    fun deleteNamedQueue(name: String) = playbackConnection.deleteNamedQueue(name)
 
     fun importLyrics(uri: Uri) {
         val id = playerUiState.value.song?.id ?: return

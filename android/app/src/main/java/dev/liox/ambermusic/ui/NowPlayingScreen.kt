@@ -36,6 +36,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.AssistChip
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -51,7 +54,12 @@ import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.outlined.SkipPrevious
+import androidx.compose.material.icons.outlined.SkipNext
+import androidx.compose.material.icons.outlined.Pause
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.filled.Speaker
+import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.BluetoothAudio
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -83,9 +91,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.preferredFrameRate
 import androidx.compose.ui.zIndex
 import androidx.media3.common.Player
 import coil3.compose.AsyncImage
@@ -94,6 +102,8 @@ import dev.liox.ambermusic.artwork.ArtworkRepository
 import androidx.palette.graphics.Palette
 import dev.liox.ambermusic.visual.ImmersiveBackdrop
 import dev.liox.ambermusic.settings.AmberSettings
+import dev.liox.ambermusic.domain.usecase.AudioQualityLabel
+import dev.liox.ambermusic.lyrics.LyricLine
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.Crossfade
 import androidx.compose.runtime.LaunchedEffect
@@ -107,7 +117,6 @@ import dev.liox.ambermusic.data.local.CategoryEntity
 import dev.liox.ambermusic.viewmodel.PlayerUiState
 import dev.liox.ambermusic.data.local.PlaylistEntity
 import dev.liox.ambermusic.data.local.SongEntity
-import dev.liox.ambermusic.lyrics.LyricLine
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.verticalScroll
@@ -136,17 +145,21 @@ fun NowPlayingScreen(
     categories: List<CategoryEntity>,
     playlists: List<PlaylistEntity>,
     queueSongs: List<SongEntity>,
-    lyrics: List<LyricLine>,
     sleepMinutes: Int,
+    lyrics: List<LyricLine>,
     onImportLyrics: () -> Unit,
+    onAdjustLyricsOffset: (Long) -> Unit,
+    onClearLyrics: () -> Unit,
     onPickCover: () -> Unit,
     onOpenEqualizer: () -> Unit,
     onRemoveCover: () -> Unit,
-    onRemoveLyrics: () -> Unit,
-    onAdjustLyrics: (Long) -> Unit,
-    onEditLyrics: (String) -> Unit,
     onSleepTimer: (Int) -> Unit,
     onMoveQueue: (Int, Int) -> Unit,
+    namedQueueNames: List<String>,
+    onSaveNamedQueue: (String) -> Unit,
+    onRestoreNamedQueue: (String) -> Unit,
+    onDeleteNamedQueue: (String) -> Unit,
+    onSaveQueuePlaylist: (String) -> Unit,
     onMetadataEdit: (Long, String, String, String) -> Unit,
     onAddPlaylist: (Long, Long) -> Unit,
     onBack: () -> Unit,
@@ -166,15 +179,29 @@ fun NowPlayingScreen(
     var showArtists by remember { mutableStateOf(false) }
     var showOptions by remember { mutableStateOf(false) }
     var showRoute by remember { mutableStateOf(false) }
-    var showLyrics by remember { mutableStateOf(false) }
+    var showQualityInfo by remember { mutableStateOf(false) }
+    var showQualityDetails by remember { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
+    var showLyrics by remember { mutableStateOf(false) }
+    var showSaveQueue by remember { mutableStateOf(false) }
+    var showQueueProfiles by remember { mutableStateOf(false) }
+    var showSavePlaylist by remember { mutableStateOf(false) }
     var showTimer by remember { mutableStateOf(false) }
     var showEdit by remember { mutableStateOf(false) }
-    var showLyricsEdit by remember { mutableStateOf(false) }
-    BackHandler(enabled = !showArtists && !showOptions && !showRoute && !showLyrics &&
-        !showQueue && !showTimer && !showEdit && !showLyricsEdit, onBack = onBack)
+    BackHandler(enabled = !showArtists && !showOptions && !showRoute &&
+        !showQueue && !showLyrics && !showTimer && !showEdit &&
+        !showSaveQueue && !showQueueProfiles && !showSavePlaylist, onBack = onBack)
     val localSettings: AmberSettings = koinInject()
-    val immersiveEnabled by localSettings.immersive.collectAsState()
+    val immersiveAllowed by localSettings.immersive.collectAsState()
+    val visualStyle by localSettings.visualStyle.collectAsState()
+    val fitCover by localSettings.fitCover.collectAsState()
+    val customBackground by localSettings.customBackground.collectAsState()
+    val wallpaperOpacity by localSettings.wallpaperOpacity.collectAsState()
+    val reduceMotion by localSettings.reduceMotion.collectAsState()
+    val immersiveEnabled = immersiveAllowed && visualStyle != "amoled" && visualStyle != "light" && customBackground.isBlank()
+    val lightMode = visualStyle == "light"
+    val pageText = LocalAmberPalette.current.foreground
+    val pageBackground = LocalAmberPalette.current.background
     val ambientRepo: ImmersiveBackdrop = koinInject()
     val song = state.song
     val artworkRepository: ArtworkRepository = koinInject()
@@ -194,28 +221,22 @@ fun NowPlayingScreen(
             else -> ambientRepo.forCover(artworkRepository.fileFor(song))
         }
     }
-    // Prepare the following song while the current one plays: track switches can crossfade
-    // immediately from disk cache instead of waiting for a new background render.
-    LaunchedEffect(song?.id, queueSongs.map { it.id }, immersiveEnabled) {
-        if (immersiveEnabled && song != null && queueSongs.size > 1) {
-            val index = queueSongs.indexOfFirst { it.id == song.id }
-            if (index >= 0) {
-                val following = queueSongs[(index + 1) % queueSongs.size]
-                delay(950)
-                ambientRepo.forCover(artworkRepository.fileFor(following))
-            }
-        }
-    }
     val atmosphere by animateColorAsState(
         targetValue = backdrop?.let { Color(it.primary) } ?: Color(0xFF15273C),
-        animationSpec = tween(1050, easing = FastOutSlowInEasing), label = "Atmósfera de portada"
+        animationSpec = tween(if (reduceMotion) 0 else 260, easing = FastOutSlowInEasing), label = "Atmósfera de portada"
     )
     val atmosphereDark by animateColorAsState(
         targetValue = backdrop?.let { Color(it.dark) } ?: Color.Black,
-        animationSpec = tween(1050, easing = FastOutSlowInEasing), label = "Fondo de álbum"
+        animationSpec = tween(if (reduceMotion) 0 else 260, easing = FastOutSlowInEasing), label = "Fondo de álbum"
     )
 
-    Box(Modifier.fillMaxSize().preferredFrameRate(120f).background(Color.Black)) {
+    Box(Modifier.fillMaxSize().background(pageBackground)) {
+        if (customBackground.isNotBlank()) {
+            AsyncImage(model = customBackground, contentDescription = null,
+                contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().alpha(if (lightMode) wallpaperOpacity * .3f else wallpaperOpacity))
+            Box(Modifier.fillMaxSize().background(pageBackground.copy(alpha = if (lightMode) .73f else .34f)))
+        }
+        if (!lightMode && visualStyle != "amoled" && customBackground.isBlank()) {
         Box(
             Modifier.fillMaxSize().background(
                 Brush.verticalGradient(
@@ -228,7 +249,7 @@ fun NowPlayingScreen(
         if (immersiveEnabled) {
             Crossfade(
                 targetState = backdrop?.file,
-                animationSpec = tween(1100, easing = FastOutSlowInEasing),
+                animationSpec = tween(if (reduceMotion) 0 else 260, easing = FastOutSlowInEasing),
                 label = "Transición ambiental sin bloques"
             ) { image ->
                 if (image != null) {
@@ -272,87 +293,57 @@ fun NowPlayingScreen(
                 )
             )
         )
+        } // end dark immersion layers; light mode keeps neutral background
         Column(
+            // Keep the system navigation edges free: no drag recognizer on the entire screen.
             modifier = Modifier.fillMaxSize().safeDrawingPadding()
-                .pointerInput(onBack) {
-                    var swipeDistance = 0f
-                    detectVerticalDragGestures(
-                        onDragStart = { swipeDistance = 0f },
-                        onDragEnd = { if (swipeDistance > 110.dp.toPx()) onBack() },
-                        onVerticalDrag = { _, drag -> swipeDistance = (swipeDistance + drag).coerceAtLeast(0f) }
-                    )
-                }
                 .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Row(Modifier.fillMaxWidth().height(80.dp), verticalAlignment = Alignment.CenterVertically) {
-                ArtistBubblesRow(state.artists, state.artistInitials, { showArtists = true })
-                Spacer(Modifier.weight(1f))
+            // Only the header can collapse the player with a downward swipe.
+            Row(
+                Modifier.fillMaxWidth().height(57.dp)
+                    .pointerInput(onBack) {
+                        var swipeDistance = 0f
+                        detectVerticalDragGestures(
+                            onDragStart = { swipeDistance = 0f },
+                            onDragEnd = { if (swipeDistance > 72.dp.toPx()) onBack() },
+                            onVerticalDrag = { _, drag -> swipeDistance = (swipeDistance + drag).coerceAtLeast(0f) }
+                        )
+                    },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Volver a biblioteca",
-                        tint = muted, modifier = Modifier.size(28.dp))
+                    Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Cerrar reproductor",
+                        tint = pageText, modifier = Modifier.size(29.dp))
                 }
-                Spacer(Modifier.width(10.dp))
-                CircleAction(onClick = { showRoute = true }, description = "Salida de audio") {
-                    Icon(
-                        if (state.route.bluetooth) Icons.Filled.BluetoothAudio else Icons.Filled.Speaker,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-            }
-            Spacer(Modifier.weight(0.48f))
-            AnimatedContent(
-                targetState = PresentedCover(song?.id, coverUri, song?.title.orEmpty()),
-                contentKey = { it.songId },
-                label = "Cambio de carátula premium",
-                transitionSpec = {
-                    (fadeIn(tween(730, easing = FastOutSlowInEasing)) +
-                        scaleIn(initialScale = 0.965f, animationSpec = tween(730, easing = FastOutSlowInEasing))) togetherWith
-                        (fadeOut(tween(450)) +
-                            scaleOut(targetScale = 1.035f, animationSpec = tween(600, easing = FastOutSlowInEasing)))
-                }
-            ) { displayed ->
-                if (displayed.artwork != null) {
-                    AsyncImage(
-                        model = displayed.artwork,
-                        contentDescription = "Carátula de ${displayed.title}",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxWidth().aspectRatio(1f)
-                            .shadow(8.dp, RoundedCornerShape(8.dp)).clip(RoundedCornerShape(8.dp))
-                            .pointerInput(song?.id) {
-                                var delta = 0f
-                                detectHorizontalDragGestures(
-                                    onDragStart = { delta = 0f },
-                                    onDragEnd = {
-                                        if (delta < -90f) onNext()
-                                        if (delta > 90f) onPrevious()
-                                    },
-                                    onHorizontalDrag = { change, amount ->
-                                        change.consume()
-                                        delta += amount
-                                    }
-                                )
-                            }
-                    )
-                } else {
-                    Box(
-                        Modifier.fillMaxWidth().aspectRatio(1f)
-                            .clip(RoundedCornerShape(8.dp)).background(Color(0xFF1E1E24)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(Icons.Filled.Speaker, contentDescription = null, tint = muted, modifier = Modifier.size(70.dp))
+                Spacer(Modifier.weight(1f))
+                if (state.artists.isNotEmpty()) {
+                    IconButton(onClick = { showArtists = true }) {
+                        Icon(Icons.Filled.People, contentDescription = "Artistas de esta canción",
+                            tint = pageText, modifier = Modifier.size(24.dp))
                     }
                 }
+                IconButton(onClick = { showRoute = true }) {
+                    Icon(if (state.route.bluetooth) Icons.Filled.BluetoothAudio else Icons.Filled.Speaker,
+                        contentDescription = "Salida de audio", tint = pageText,
+                        modifier = Modifier.size(24.dp))
+                }
             }
-            Spacer(Modifier.weight(0.55f))
+            Spacer(Modifier.height(8.dp))
+            CoverCarousel(
+                song = song, currentCover = coverUri, queue = queueSongs,
+                artwork = artworkRepository, fitCover = fitCover, reduceMotion = reduceMotion,
+                onPrevious = onPrevious, onNext = onNext
+            )
+            Spacer(Modifier.weight(1f))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        song?.title ?: "Selecciona una canción", color = Color.White,
+                        song?.title ?: "Selecciona una canción", color = pageText,
                         fontWeight = FontWeight.Bold, fontSize = 20.sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis
+                        modifier = if (reduceMotion) Modifier else Modifier.basicMarquee(iterations = 2, initialDelayMillis = 1600),
+                        maxLines = 1, overflow = TextOverflow.Clip
                     )
                     Spacer(Modifier.height(7.dp))
                     Text(
@@ -364,7 +355,7 @@ fun NowPlayingScreen(
                 Spacer(Modifier.width(12.dp))
                 Box(
                     Modifier.size(44.dp).clip(CircleShape)
-                        .background(if (state.isFavorite) Color(0xFF17324C) else glass)
+                        .background(if (state.isFavorite) amber.copy(alpha = 0.23f) else glass)
                         .combinedClickable(
                             enabled = song != null,
                             onClickLabel = if (state.isFavorite) "Quitar de Favoritos" else "Añadir a Favoritos",
@@ -377,12 +368,12 @@ fun NowPlayingScreen(
                     Icon(
                         if (state.isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
                         contentDescription = if (state.isFavorite) "En Favoritos" else "Añadir a Favoritos",
-                        tint = if (state.isFavorite) amber else Color.White,
+                        tint = if (state.isFavorite) amber else pageText,
                         modifier = Modifier.size(23.dp)
                     )
                 }
             }
-            Spacer(Modifier.height(27.dp))
+            Spacer(Modifier.height(18.dp))
             PillSeekbar(
                 positionMs = state.progress.positionMs,
                 durationMs = state.progress.durationMs.takeIf { it > 0 } ?: song?.durationMs ?: 0,
@@ -399,7 +390,8 @@ fun NowPlayingScreen(
                     state.qualityLabel,
                     color = amber, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(horizontal = 9.dp),
+                    modifier = Modifier.weight(1f).padding(horizontal = 9.dp)
+                        .clickable(enabled = song != null) { showQualityInfo = true },
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
                 Text(
@@ -419,18 +411,25 @@ fun NowPlayingScreen(
                         modifier = Modifier.size(26.dp))
                 }
                 IconButton(onClick = onPrevious) {
-                    Icon(Icons.Filled.SkipPrevious, contentDescription = "Anterior", tint = Color.White,
+                    Icon(if (LocalAmberIconStyle.current == "outlined") Icons.Outlined.SkipPrevious else Icons.Filled.SkipPrevious,
+                        contentDescription = "Anterior", tint = pageText,
                         modifier = Modifier.size(36.dp))
                 }
                 IconButton(onClick = onPlayPause, modifier = Modifier.size(76.dp)) {
-                    Icon(
-                        if (state.playback.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        contentDescription = if (state.playback.isPlaying) "Pausar" else "Reproducir",
-                        tint = Color.White, modifier = Modifier.size(53.dp)
-                    )
+                    Box(Modifier.size(65.dp).shadow(8.dp, CircleShape)
+                        .clip(CircleShape).background(amber), contentAlignment = Alignment.Center) {
+                        Icon(
+                            if (LocalAmberIconStyle.current == "outlined") {
+                                if (state.playback.isPlaying) Icons.Outlined.Pause else Icons.Outlined.PlayArrow
+                            } else if (state.playback.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            contentDescription = if (state.playback.isPlaying) "Pausar" else "Reproducir",
+                            tint = if (lightMode) Color.White else Color(0xFF19121B), modifier = Modifier.size(39.dp)
+                        )
+                    }
                 }
                 IconButton(onClick = onNext) {
-                    Icon(Icons.Filled.SkipNext, contentDescription = "Siguiente", tint = Color.White,
+                    Icon(if (LocalAmberIconStyle.current == "outlined") Icons.Outlined.SkipNext else Icons.Filled.SkipNext,
+                        contentDescription = "Siguiente", tint = pageText,
                         modifier = Modifier.size(36.dp))
                 }
                 IconButton(onClick = onRepeat) {
@@ -442,28 +441,27 @@ fun NowPlayingScreen(
                     )
                 }
             }
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PlayerShortcut("Letras", Modifier.weight(1f)) { showLyrics = true }
-                PlayerShortcut("Cola", Modifier.weight(1f)) { showQueue = true }
-                PlayerShortcut("Temporizador", Modifier.weight(1f)) { showTimer = true }
+            Spacer(Modifier.height(16.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                QuickActionPill(Modifier.weight(1f), Icons.Filled.TextFields, "Letras") { showLyrics = true }
+                QuickActionPill(Modifier.weight(1f), Icons.Filled.QueueMusic, "Cola") { showQueue = true }
+                QuickActionPill(Modifier.weight(1f), Icons.Filled.MoreHoriz, "Audio") { showQualityInfo = true }
+                QuickActionPill(Modifier.weight(1f), Icons.Filled.Timer, "Timer") { showTimer = true }
             }
-            Spacer(Modifier.weight(0.15f))
+            Spacer(Modifier.weight(0.32f))
             Row(
                 Modifier.fillMaxWidth().height(68.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 CircleAction(onClick = onBack, description = "Biblioteca") {
-                    Icon(Icons.Filled.List, contentDescription = null, tint = Color.White, modifier = Modifier.size(27.dp))
+                    Icon(Icons.Filled.List, contentDescription = null, tint = pageText, modifier = Modifier.size(27.dp))
                 }
                 Column(Modifier.weight(1f).padding(start = 15.dp)) {
-                    Text("Reproduciendo desde", color = muted, fontSize = 11.sp)
-                    Spacer(Modifier.height(3.dp))
-                    Text(state.sourceName, color = Color.White, fontSize = 13.sp,
+                    Text("Cola · ${state.sourceName}", color = pageText, fontSize = 13.sp,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 CircleAction(onClick = { showOptions = true }, description = "Opciones") {
-                    Icon(Icons.Filled.MoreHoriz, contentDescription = null, tint = Color.White, modifier = Modifier.size(26.dp))
+                    Icon(Icons.Filled.MoreHoriz, contentDescription = null, tint = pageText, modifier = Modifier.size(26.dp))
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -473,13 +471,13 @@ fun NowPlayingScreen(
     if (showArtists) {
         ModalBottomSheet(
             onDismissRequest = { showArtists = false },
-            containerColor = Color(0xFF0C1622), contentColor = Color.White
+            containerColor = if (lightMode) Color(0xFFEDF0F5) else Color(0xFF0C1622), contentColor = pageText
         ) {
             Text("Artistas de la canción", fontWeight = FontWeight.Bold, fontSize = 19.sp,
                 modifier = Modifier.padding(horizontal = 22.dp, vertical = 12.dp))
             state.artists.forEach { artist ->
                 Text(
-                    artist.name, color = Color.White,
+                    artist.name, color = pageText,
                     modifier = Modifier.fillMaxWidth().clickable {
                         showArtists = false
                         onArtist(artist.id)
@@ -492,24 +490,137 @@ fun NowPlayingScreen(
     if (showOptions) {
         ModalBottomSheet(
             onDismissRequest = { showOptions = false },
-            containerColor = Color(0xFF0C1622), contentColor = Color.White
+            containerColor = if (lightMode) Color(0xFFEDF0F5) else Color(0xFF0C1622), contentColor = pageText
         ) {
             Text("Opciones de reproducción", fontWeight = FontWeight.Bold, fontSize = 19.sp,
                 modifier = Modifier.padding(horizontal = 22.dp, vertical = 12.dp))
             listOf(
                 "Cola de reproducción" to { showQueue = true },
+                "Letras" to { showLyrics = true },
+                "Guardar cola con nombre" to { showSaveQueue = true },
+                "Colas guardadas" to { showQueueProfiles = true },
+                "Guardar cola como playlist" to { showSavePlaylist = true },
+                "Editar metadatos" to { showEdit = true },
                 "Temporizador" to { showTimer = true },
                 "Ecualizador del sistema" to { onOpenEqualizer() }
             ).forEach { (label, action) ->
-                Text(label, color = Color.White,
+                Text(label, color = pageText,
                     modifier = Modifier.fillMaxWidth().clickable { showOptions = false; action() }
                         .padding(horizontal = 24.dp, vertical = 16.dp))
             }
             Spacer(Modifier.height(30.dp))
         }
     }
+    if (showSaveQueue) {
+        var name by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showSaveQueue = false },
+            title = { Text("Guardar cola") },
+            text = { OutlinedTextField(name, { name = it.take(50) }, label = { Text("Nombre de la cola") }) },
+            confirmButton = { TextButton(onClick = {
+                onSaveNamedQueue(name); showSaveQueue = false
+            }, enabled = name.isNotBlank()) { Text("Guardar") } },
+            dismissButton = { TextButton(onClick = { showSaveQueue = false }) { Text("Cancelar") } }
+        )
+    }
+    if (showSavePlaylist) {
+        var name by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showSavePlaylist = false },
+            title = { Text("Guardar como playlist") },
+            text = { OutlinedTextField(name, { name = it.take(50) }, label = { Text("Nombre") }) },
+            confirmButton = { TextButton(onClick = {
+                onSaveQueuePlaylist(name); showSavePlaylist = false
+            }, enabled = name.isNotBlank()) { Text("Guardar") } },
+            dismissButton = { TextButton(onClick = { showSavePlaylist = false }) { Text("Cancelar") } }
+        )
+    }
+    if (showQueueProfiles) {
+        ModalBottomSheet(onDismissRequest = { showQueueProfiles = false },
+            containerColor = if (lightMode) Color(0xFFEDF0F5) else Color(0xFF0C1622), contentColor = pageText) {
+            Text("Colas guardadas", fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 22.dp, vertical = 14.dp))
+            namedQueueNames.forEach { name ->
+                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text(name, modifier = Modifier.weight(1f).clickable {
+                        onRestoreNamedQueue(name); showQueueProfiles = false
+                    }.padding(vertical = 13.dp))
+                    TextButton(onClick = { onDeleteNamedQueue(name) }) {
+                        Text("Quitar", color = muted)
+                    }
+                }
+            }
+            if (namedQueueNames.isEmpty()) Text("Todavía no guardaste ninguna cola.",
+                color = muted, modifier = Modifier.padding(22.dp))
+            Spacer(Modifier.height(30.dp))
+        }
+    }
+    if (showLyrics) {
+        ModalBottomSheet(
+            onDismissRequest = { showLyrics = false },
+            containerColor = if (lightMode) Color(0xFFF8F9FC) else Color(0xFF0C1622),
+            contentColor = pageText
+        ) {
+            val hasTimedLyrics = lyrics.any { it.timeMs >= 0L }
+            val activeIndex = remember(lyrics, state.progress.positionMs) {
+                lyrics.indexOfLast { it.timeMs >= 0L && it.timeMs <= state.progress.positionMs }
+            }
+            Column(Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Letras", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = pageText)
+                        Text(
+                            if (lyrics.isEmpty()) "Importa un archivo .lrc o texto sincronizado"
+                            else if (hasTimedLyrics) "Sincronizadas con la reproducción"
+                            else "Letras sin marcas de tiempo",
+                            color = muted, fontSize = 12.sp
+                        )
+                    }
+                    TextButton(onClick = onImportLyrics) { Text(if (lyrics.isEmpty()) "Importar" else "Reemplazar", color = amber) }
+                }
+                if (lyrics.isNotEmpty()) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        AssistChip(onClick = { onAdjustLyricsOffset(-250L) }, label = { Text("-250 ms") })
+                        AssistChip(onClick = { onAdjustLyricsOffset(250L) }, label = { Text("+250 ms") })
+                        AssistChip(onClick = onClearLyrics, label = { Text("Borrar") })
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+                if (lyrics.isEmpty()) {
+                    Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Todavía no hay letras para esta canción.", color = pageText, fontWeight = FontWeight.SemiBold)
+                        Text("Puedes importar un archivo .lrc para mostrar la letra y ajustar el desfase dentro de AmberMusic.", color = muted)
+                        Button(onClick = onImportLyrics) { Text("Importar letras") }
+                    }
+                } else {
+                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 460.dp), contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp)) {
+                        items(lyrics.size) { index ->
+                            val line = lyrics[index]
+                            val active = index == activeIndex && hasTimedLyrics
+                            Text(
+                                text = line.text,
+                                color = if (active) amber else pageText.copy(alpha = if (hasTimedLyrics) 0.74f else 0.96f),
+                                fontSize = if (active) 20.sp else 16.sp,
+                                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp)
+                            )
+                        }
+                        item { Spacer(Modifier.height(22.dp)) }
+                    }
+                }
+            }
+        }
+    }
+
     if (showQueue) {
-        ModalBottomSheet(onDismissRequest = { showQueue = false }, containerColor = Color(0xFF0C1622), contentColor = Color.White) {
+        ModalBottomSheet(onDismissRequest = { showQueue = false }, containerColor = if (lightMode) Color(0xFFEDF0F5) else Color(0xFF0C1622), contentColor = pageText) {
             Text("Cola de reproducción", fontWeight = FontWeight.Bold, fontSize = 20.sp,
                 modifier = Modifier.padding(horizontal = 22.dp, vertical = 12.dp))
             LazyColumn(Modifier.fillMaxWidth().height(410.dp)) {
@@ -537,72 +648,19 @@ fun NowPlayingScreen(
                         verticalAlignment = Alignment.CenterVertically) {
                         Text("${index + 1}", color = amber, modifier = Modifier.width(27.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(entry.title, color = Color.White, maxLines = 1)
+                            Text(entry.title, color = pageText, maxLines = 1)
                             Text(entry.artistDisplay, color = muted, fontSize = 12.sp, maxLines = 1)
                         }
                         IconButton(onClick = { onMoveQueue(index, index - 1) }, enabled = index > 0) {
-                            Icon(Icons.Filled.KeyboardArrowUp, "Subir", tint = Color.White)
+                            Icon(Icons.Filled.KeyboardArrowUp, "Subir", tint = pageText)
                         }
                         IconButton(onClick = { onMoveQueue(index, index + 1) }, enabled = index < queueSongs.lastIndex) {
-                            Icon(Icons.Filled.KeyboardArrowDown, "Bajar", tint = Color.White)
+                            Icon(Icons.Filled.KeyboardArrowDown, "Bajar", tint = pageText)
                         }
                     }
                 }
             }
         }
-    }
-    if (showLyrics) {
-        ModalBottomSheet(onDismissRequest = { showLyrics = false }, containerColor = Color(0xFF0C1622), contentColor = Color.White) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Letras", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f))
-                TextButton(onClick = { onImportLyrics() }) { Text("Importar .lrc", color = amber) }
-            }
-            if (lyrics.isEmpty()) {
-                Text("Importa un archivo .lrc o .txt desde tu teléfono. No se buscarán letras en internet.",
-                    color = muted, modifier = Modifier.padding(22.dp))
-            } else {
-                val currentIndex = lyrics.indexOfLast { it.timeMs >= 0 && it.timeMs <= state.progress.positionMs }
-                LazyColumn(Modifier.fillMaxWidth().height(420.dp)) {
-                    items(lyrics.size) { index ->
-                        val line = lyrics[index]
-                        Text(line.text, color = if (index == currentIndex) amber else Color.White.copy(alpha = 0.67f),
-                            fontSize = if (index == currentIndex) 21.sp else 17.sp,
-                            fontWeight = if (index == currentIndex) FontWeight.Bold else FontWeight.Normal,
-                            modifier = Modifier.fillMaxWidth().clickable(enabled = line.timeMs >= 0) {
-                                onSeek(line.timeMs)
-                            }.padding(horizontal = 24.dp, vertical = 10.dp))
-                    }
-                }
-                Row(Modifier.fillMaxWidth().padding(horizontal = 15.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween) {
-                    TextButton(onClick = { onAdjustLyrics(-500) }) { Text("−0.5 s", color = amber) }
-                    TextButton(onClick = { showLyricsEdit = true }) { Text("Editar .lrc", color = amber) }
-                    TextButton(onClick = { onAdjustLyrics(500) }) { Text("+0.5 s", color = amber) }
-                }
-                TextButton(onClick = onRemoveLyrics, modifier = Modifier.padding(horizontal = 16.dp)) {
-                    Text("Quitar letras importadas", color = muted)
-                }
-            }
-            Spacer(Modifier.height(25.dp))
-        }
-    }
-    if (showLyricsEdit) {
-        var editing by remember(state.song?.id) {
-            mutableStateOf(lyrics.joinToString("\n") { entry ->
-                if (entry.timeMs < 0L) entry.text else {
-                    val ms = entry.timeMs
-                    "[%02d:%02d.%02d] %s".format(ms / 60000, (ms / 1000) % 60, (ms % 1000) / 10, entry.text)
-                }
-            })
-        }
-        AlertDialog(onDismissRequest = { showLyricsEdit = false },
-            title = { Text("Editar letra local") },
-            text = { OutlinedTextField(editing, { editing = it.take(20000) },
-                label = { Text("Líneas LRC [mm:ss.xx]") }, maxLines = 14, minLines = 8) },
-            confirmButton = { TextButton(onClick = { onEditLyrics(editing); showLyricsEdit = false }) { Text("Guardar") } },
-            dismissButton = { TextButton(onClick = { showLyricsEdit = false }) { Text("Cancelar") } }
-        )
     }
     if (showTimer) {
         AlertDialog(onDismissRequest = { showTimer = false },
@@ -636,11 +694,44 @@ fun NowPlayingScreen(
             }, enabled = newTitle.isNotBlank() && newArtist.isNotBlank() && newAlbum.isNotBlank()) { Text("Guardar") } },
             dismissButton = { TextButton(onClick = { showEdit = false }) { Text("Cancelar") } })
     }
+    if (showQualityInfo && song != null) {
+        val codec = AudioQualityLabel.detectedCodec(song.format, song.codecMime)
+        val bps = song.bitrateBps?.takeIf { it > 0L }
+        AlertDialog(
+            onDismissRequest = { showQualityInfo = false },
+            containerColor = if (lightMode) Color(0xFFF8F9FC) else Color(0xFF101E2E),
+            title = { Text("Información de audio", color = pageText) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Text("Formato  ·  $codec", color = pageText)
+                    if (bps != null) Text("Bitrate  ·  ${AudioQualityLabel.bitrateDescription(bps, song.bitrateSource)}", color = muted)
+                    song.sampleRateHz?.takeIf { it > 0 }?.let { rate ->
+                        Text("Frecuencia  ·  ${rate / 1000.0} kHz", color = muted)
+                    }
+                    song.bitDepth?.takeIf { it > 0 }?.let { bits ->
+                        Text("Profundidad  ·  $bits bits", color = muted)
+                    }
+                    song.channelCount?.takeIf { it > 0 }?.let { channels ->
+                        Text("Canales  ·  ${if (channels == 2) "Estéreo" else if (channels == 1) "Mono" else "$channels"}", color = muted)
+                    }
+                    Text("Salida  ·  ${state.route.name}", color = muted)
+                    TextButton(onClick = { showQualityDetails = !showQualityDetails }) {
+                        Text(if (showQualityDetails) "Menos información" else "Más información", color = amber)
+                    }
+                    if (showQualityDetails) Text(
+                        "Estas cifras pertenecen al archivo. Android puede remuestrear la señal. " +
+                            "Bluetooth puede usar un códec con pérdidas; no se garantiza salida bit-perfect.",
+                        color = muted, fontSize = 12.sp)
+                }
+            },
+            confirmButton = { TextButton(onClick = { showQualityInfo = false }) { Text("Cerrar", color = amber) } }
+        )
+    }
     if (showRoute) {
         AlertDialog(
             onDismissRequest = { showRoute = false },
-            containerColor = Color(0xFF101E2E),
-            title = { Text("Salida de audio", color = Color.White) },
+            containerColor = if (lightMode) Color(0xFFF8F9FC) else Color(0xFF101E2E),
+            title = { Text("Salida de audio", color = pageText) },
             text = {
                 Text(
                     "Ruta detectada: ${state.route.name}. " +
@@ -656,21 +747,9 @@ fun NowPlayingScreen(
                 }) { Text("Bluetooth", color = amber) }
             },
             dismissButton = {
-                TextButton(onClick = { showRoute = false }) { Text("Cerrar", color = Color.White) }
+                TextButton(onClick = { showRoute = false }) { Text("Cerrar", color = pageText) }
             }
         )
-    }
-}
-
-
-@Composable
-private fun PlayerShortcut(title: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Box(modifier.clip(RoundedCornerShape(18.dp))
-        .background(LocalAmberPalette.current.surfaceRaised)
-        .clickable(onClick = onClick)
-        .padding(horizontal = 7.dp, vertical = 13.dp),
-        contentAlignment = Alignment.Center) {
-        Text(title, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -680,6 +759,27 @@ private fun CircleAction(onClick: () -> Unit, description: String, content: @Com
         Modifier.size(52.dp).clip(CircleShape).background(glass).clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) { content() }
+}
+
+@Composable
+private fun QuickActionPill(
+    modifier: Modifier = Modifier,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier.clip(RoundedCornerShape(18.dp))
+            .background(glass)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = LocalAmberPalette.current.foreground, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(title, color = LocalAmberPalette.current.foreground, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    }
 }
 
 @Composable
@@ -706,6 +806,8 @@ fun ArtistBubblesRow(artists: List<ArtistEntity>, initials: List<String>, onClic
 @Composable
 private fun PillSeekbar(positionMs: Long, durationMs: Long, onSeek: (Long) -> Unit) {
     var dragProgress by remember(durationMs) { mutableStateOf<Float?>(null) }
+    val seekColor = LocalAmberPalette.current.foreground
+    val railColor = LocalAmberPalette.current.muted.copy(alpha = 0.48f)
     val fraction = dragProgress ?: if (durationMs > 0) {
         (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
     } else 0f
@@ -733,13 +835,13 @@ private fun PillSeekbar(positionMs: Long, durationMs: Long, onSeek: (Long) -> Un
     ) {
         val middle = size.height / 2f
         val track = 4.dp.toPx()
-        drawRoundRect(Color(0xFF2A3D52), Offset(0f, middle - track / 2),
+        drawRoundRect(railColor, Offset(0f, middle - track / 2),
             Size(size.width, track), androidx.compose.ui.geometry.CornerRadius(track))
-        drawRoundRect(Color.White, Offset(0f, middle - track / 2),
+        drawRoundRect(seekColor, Offset(0f, middle - track / 2),
             Size(size.width * fraction, track), androidx.compose.ui.geometry.CornerRadius(track))
         val thumbWidth = 13.dp.toPx()
         val thumbHeight = 25.dp.toPx()
-        drawRoundRect(Color.White,
+        drawRoundRect(seekColor,
             Offset((size.width * fraction - thumbWidth / 2).coerceIn(0f, (size.width - thumbWidth).coerceAtLeast(0f)),
                 middle - thumbHeight / 2),
             Size(thumbWidth, thumbHeight), androidx.compose.ui.geometry.CornerRadius(6.dp.toPx()))

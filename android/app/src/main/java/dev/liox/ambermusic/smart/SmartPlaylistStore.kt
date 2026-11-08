@@ -26,6 +26,7 @@ object SmartRules {
     const val FAVOURITES = "FAVOURITES"
     const val POPULAR = "POPULAR"
     const val RECENT = "RECENT"
+    const val COMBINED = "COMBINED"
 
     fun matches(rule: SmartPlaylist, song: SongEntity, state: SongUserStateEntity?): Boolean {
         if (!song.isVisible || song.durationMs <= 60_000) return false
@@ -39,6 +40,15 @@ object SmartRules {
             FAVOURITES -> state?.isFavorite == true
             POPULAR -> (state?.playCount ?: 0L) >= (value.toLongOrNull()?.coerceAtLeast(1) ?: 3L)
             RECENT -> (state?.lastPlayedAtEpochMs ?: 0L) >= System.currentTimeMillis() - 30L * 86400_000L
+            COMBINED -> value.split('&').map { it.trim().lowercase() }
+                .takeIf { it.isNotEmpty() }?.all { clause -> when {
+                    clause == "favoritas" -> state?.isFavorite == true
+                    clause == "no_reciente" -> (state?.lastPlayedAtEpochMs ?: 0L) <
+                        System.currentTimeMillis() - 30L * 86400_000L
+                    clause.startsWith("formato=") -> song.format.equals(clause.substringAfter('='), true)
+                    clause.startsWith("artista=") -> song.artistDisplay.contains(clause.substringAfter('='), true)
+                    else -> false
+                } } == true
             else -> false
         }
     }
@@ -52,7 +62,8 @@ class SmartPlaylistStore(context: Context) {
     fun add(name: String, type: String, value: String) {
         require(name.trim().isNotEmpty() && name.length <= 80)
         require(type in setOf(SmartRules.ARTIST, SmartRules.ALBUM, SmartRules.FOLDER,
-            SmartRules.FORMAT, SmartRules.GENRE, SmartRules.FAVOURITES, SmartRules.POPULAR, SmartRules.RECENT))
+            SmartRules.FORMAT, SmartRules.GENRE, SmartRules.FAVOURITES, SmartRules.POPULAR,
+            SmartRules.RECENT, SmartRules.COMBINED))
         val rule = SmartPlaylist(UUID.randomUUID().toString(), name.trim(), type, value.take(100))
         save(_rules.value + rule)
     }

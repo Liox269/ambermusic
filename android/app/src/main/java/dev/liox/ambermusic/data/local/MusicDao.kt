@@ -21,6 +21,9 @@ abstract class MusicDao {
     @Query("UPDATE songs SET scanToken = :scanToken, isVisible = 1 WHERE id = :songId")
     abstract suspend fun markSongSeen(songId: Long, scanToken: Long)
 
+    @Query("UPDATE songs SET scanToken = :scanToken, isVisible = 1, dateAddedSeconds = :addedAt WHERE id = :songId")
+    abstract suspend fun markSongSeenWithDate(songId: Long, scanToken: Long, addedAt: Long)
+
     @Query("UPDATE songs SET isVisible = 0 WHERE scanToken != :scanToken AND isVisible = 1")
     abstract suspend fun hideSongsNotSeenInScan(scanToken: Long): Int
 

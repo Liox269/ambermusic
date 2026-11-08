@@ -39,6 +39,7 @@ class MusicPlaybackService : MediaSessionService() {
     private val dao: MusicDao by inject()
     private val artwork: ArtworkRepository by inject()
     private val settings: AmberSettings by inject()
+    private val routeTracker: AudioRouteTracker by inject()
     private val gainReader: ReplayGainReader by inject()
     private var gainJob: Job? = null
     private var rampJob: Job? = null
@@ -47,8 +48,15 @@ class MusicPlaybackService : MediaSessionService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var mediaSession: MediaSession? = null
     private lateinit var player: ExoPlayer
+    private lateinit var crossfade: CrossfadeCoordinator
     private var artworkJob: Job? = null
     private var audioId: Int = C.AUDIO_SESSION_ID_UNSET
+    private var lastWidgetSnapshot: WidgetSnapshot? = null
+
+    private data class WidgetSnapshot(
+        val id: String?, val title: String?, val artist: String?,
+        val playing: Boolean, val artworkUri: String?
+    )
 
     override fun onCreate() {
         super.onCreate()
@@ -60,8 +68,21 @@ class MusicPlaybackService : MediaSessionService() {
             .setAudioAttributes(attributes, true)
             .setHandleAudioBecomingNoisy(true)
             .build()
+        crossfade = CrossfadeCoordinator(this, player, serviceScope,
+            audioAttributes = attributes,
+            seconds = { settings.crossfadeSeconds.value },
+            targetVolume = { gainVolume })
+        // Monitor only while crossfade is enabled AND audio is playing.
+        // A disabled feature must create zero polling wakeups.
         serviceScope.launch {
-            combine(settings.offload, settings.replayGain) { enabled, gain -> enabled && gain == "off" }
+            settings.crossfadeSeconds.collectLatest { duration ->
+                if (duration > 0 && player.isPlaying) crossfade.start() else crossfade.stop()
+            }
+        }
+        serviceScope.launch {
+            combine(settings.offload, settings.replayGain, settings.crossfadeSeconds) { enabled, gain, fade ->
+                enabled && gain == "off" && fade == 0
+            }
                 .collectLatest { enabled ->
                 val preferences = TrackSelectionParameters.AudioOffloadPreferences.Builder()
                     .setAudioOffloadMode(
@@ -89,21 +110,42 @@ class MusicPlaybackService : MediaSessionService() {
                 .build()
         )
         player.addListener(object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying && settings.crossfadeSeconds.value > 0) crossfade.start()
+                else crossfade.stop()
+            }
+
             override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
+                crossfade.onTrackChanged(mediaItem?.mediaId)
                 loadArtworkForCurrentItem()
                 refreshGain()
             }
 
             override fun onEvents(player: Player, events: Player.Events) {
+                // Avoid decoding/refreshing the RemoteViews widget on seek, buffering and
+                // unrelated player callbacks. The notification itself remains owned by Media3.
+                val artworkChanged = events.contains(Player.EVENT_MEDIA_METADATA_CHANGED)
                 val meta = player.mediaMetadata
+                val next = WidgetSnapshot(
+                    id = player.currentMediaItem?.mediaId,
+                    title = meta.title?.toString(),
+                    artist = meta.artist?.toString(),
+                    playing = player.isPlaying,
+                    artworkUri = meta.artworkUri?.toString()
+                )
+                val positionChanged = events.contains(Player.EVENT_POSITION_DISCONTINUITY)
+                if (!artworkChanged && !positionChanged && next == lastWidgetSnapshot) return
+                lastWidgetSnapshot = next
                 widgetJob?.cancel()
-                val title = meta.title?.toString()
-                val artist = meta.artist?.toString()
-                val playing = player.isPlaying
+                // Player callbacks run on its application looper (main). Snapshot every
+                // ExoPlayer value here: Dispatchers.IO must never access the Player.
                 val cover = meta.artworkData
+                val positionMs = player.currentPosition
+                val durationMs = player.duration
                 widgetJob = serviceScope.launch(Dispatchers.IO) {
                     AmberWidgetProvider.update(this@MusicPlaybackService,
-                        title, artist, playing, cover)
+                        next.title, next.artist, next.playing, cover,
+                        positionMs = positionMs, durationMs = durationMs)
                 }
             }
 
@@ -115,7 +157,9 @@ class MusicPlaybackService : MediaSessionService() {
             }
         })
         serviceScope.launch {
-            settings.replayGain.collectLatest { refreshGain() }
+            combine(settings.replayGain, settings.autoOutputProfiles,
+                settings.routePresets, routeTracker.route) { _, _, _, _ -> Unit }
+                .collectLatest { refreshGain() }
         }
         refreshGain()
     }
@@ -124,16 +168,21 @@ class MusicPlaybackService : MediaSessionService() {
         gainJob?.cancel()
         rampJob?.cancel()
         val item = player.currentMediaItem
-        player.volume = if (settings.smoothTransition.value && player.isPlaying) 0f else 1f
+        if (!crossfade.isMixing) {
+            player.volume = if (settings.smoothTransition.value && player.isPlaying) 0f else 1f
+        }
         gainVolume = 1f
         if (item == null) return
         gainJob = serviceScope.launch {
-            val mode = settings.replayGain.value
+            val mode = settings.replayGainForRoute(routeTracker.route.value.name)
             val id = item.mediaId.toLongOrNull() ?: return@launch
             val song = withContext(Dispatchers.IO) { dao.getSong(id) } ?: return@launch
-            val volume = gainReader.volumeFactor(Uri.parse(song.contentUri), song.displayName, mode)
+            val volume = withContext(Dispatchers.IO) {
+                gainReader.volumeFactor(Uri.parse(song.contentUri), song.displayName, mode)
+            }
             if (player.currentMediaItem?.mediaId != item.mediaId) return@launch
             gainVolume = volume
+            if (crossfade.isMixing) return@launch
             if (settings.smoothTransition.value && player.isPlaying) {
                 rampJob = serviceScope.launch {
                     repeat(8) { step ->
@@ -200,6 +249,7 @@ class MusicPlaybackService : MediaSessionService() {
         gainJob?.cancel()
         rampJob?.cancel()
         widgetJob?.cancel()
+        crossfade.stop()
         AmberWidgetProvider.update(this, null, null, false)
         serviceScope.cancel()
         mediaSession?.release()

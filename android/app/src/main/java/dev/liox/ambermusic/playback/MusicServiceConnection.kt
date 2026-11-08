@@ -16,6 +16,7 @@ import androidx.media3.session.SessionToken
 import dev.liox.ambermusic.data.local.ArtistEntity
 import dev.liox.ambermusic.data.local.MusicDao
 import dev.liox.ambermusic.data.local.SongEntity
+import dev.liox.ambermusic.settings.AmberSettings
 import dev.liox.ambermusic.domain.repository.MusicTrack
 import dev.liox.ambermusic.domain.usecase.AudioQualityLabel
 import kotlinx.coroutines.CoroutineScope
@@ -42,7 +43,8 @@ import kotlin.coroutines.resumeWithException
 class MusicServiceConnection(
     context: Context,
     private val dao: MusicDao,
-    private val routeTracker: AudioRouteTracker
+    private val routeTracker: AudioRouteTracker,
+    private val settings: AmberSettings
 ) {
     private val appContext = context.applicationContext
     private val saved = appContext.getSharedPreferences("amber_playback_resume", Context.MODE_PRIVATE)
@@ -83,7 +85,7 @@ class MusicServiceConnection(
             val track = MusicTrack(
                 s.id, s.contentUri, s.title, s.artistDisplay, s.albumTitle,
                 s.durationMs, s.format, s.bitrateBps, s.bitrateSource,
-                s.sampleRateHz, s.bitDepth
+                s.sampleRateHz, s.bitDepth, s.codecMime, s.channelCount
             )
             PlaybackSong(s, it.artists, image, AudioQualityLabel.forTrack(track))
         }
@@ -92,7 +94,13 @@ class MusicServiceConnection(
     private val playerListener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             publish(player)
-            snapshotQueue(player)
+            val importantChange = events.contains(Player.EVENT_PLAY_WHEN_READY_CHANGED) ||
+                events.contains(Player.EVENT_POSITION_DISCONTINUITY) ||
+                events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION) ||
+                events.contains(Player.EVENT_TIMELINE_CHANGED) ||
+                events.contains(Player.EVENT_REPEAT_MODE_CHANGED) ||
+                events.contains(Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED)
+            snapshotQueue(player, force = importantChange)
         }
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
@@ -185,11 +193,11 @@ class MusicServiceConnection(
                 controller?.let {
                     updateProgress(it)
                     val currentTime = android.os.SystemClock.elapsedRealtime()
-                    if (currentTime - lastSnapshotMs > 5_000L) {
+                    if (PlaybackRefreshPolicy.shouldPersist(lastSnapshotMs, currentTime)) {
                         snapshotQueue(it)
                     }
                 }
-                delay(250)
+                delay(PlaybackRefreshPolicy.PROGRESS_POLL_MS)
             }
         }
     }
@@ -198,6 +206,9 @@ class MusicServiceConnection(
         if (songs.isEmpty()) return
         require(initialIndex in songs.indices)
         val target = connect()
+        // New selection is an unnamed queue. Previously saved queue profiles remain intact.
+        activeQueueName = null
+        saved.edit().remove("activeQueueName").apply()
         val items = songs.map { song ->
             val metadata = MediaMetadata.Builder()
                 .setTitle(song.title)
@@ -218,54 +229,133 @@ class MusicServiceConnection(
         snapshotQueue(target, force = true)
     }
 
-    /** Restore previous queue paused: never start playing unexpectedly after app relaunch. */
+    /** On cold start, restore the last session. Never auto-play after relaunch. */
     private suspend fun restoreIfEmpty(target: MediaController) {
-        if (target.mediaItemCount != 0) return
+        if (!settings.restoreSession.value || target.mediaItemCount != 0) return
         val text = withContext(Dispatchers.IO) { saved.getString("queue", null) } ?: return
-        try {
+        if (restoreSnapshot(target, text)) {
+            activeQueueName = saved.getString("activeQueueName", null)
+        }
+    }
+
+    /** Reconstruct by stable song ID, not the old numeric index. Missing songs are skipped. */
+    private suspend fun restoreSnapshot(target: MediaController, text: String): Boolean {
+        return try {
             val data = JSONObject(text)
-            val ids = data.getJSONArray("ids")
-            val songs = withContext(Dispatchers.IO) {
-                (0 until ids.length()).mapNotNull { index -> dao.getSong(ids.getLong(index)) }
-            }.filter { it.isVisible && it.durationMs > 60_000 }
-            if (songs.isEmpty()) return
-            val savedCurrentId = data.optString("currentId", "")
-            val index = songs.indexOfFirst { it.id.toString() == savedCurrentId }
-                .takeIf { it >= 0 }
-                ?: data.optInt("index", 0).coerceIn(0, songs.lastIndex)
-            target.setMediaItems(songs.map { song ->
-                MediaItem.Builder().setMediaId(song.id.toString())
-                    .setUri(Uri.parse(song.contentUri))
-                    .setMediaMetadata(MediaMetadata.Builder()
-                        .setTitle(song.title).setArtist(song.artistDisplay)
-                        .setAlbumTitle(song.albumTitle).setDurationMs(song.durationMs).build())
-                    .build()
-            }, index, data.optLong("position", 0L).coerceAtLeast(0L))
+            val idsJson = data.getJSONArray("ids")
+            val savedIds = (0 until idsJson.length()).map { idsJson.getLong(it) }
+            val surviving = withContext(Dispatchers.IO) {
+                savedIds.mapIndexedNotNull { originalIndex, id ->
+                    dao.getSong(id)?.takeIf { it.isVisible && it.durationMs > 60_000L }
+                        ?.let { originalIndex to it }
+                }
+            }
+            if (surviving.isEmpty()) return false
+            val songs = surviving.map { it.second }
+            val savedIndex = data.optInt("index", 0)
+            val savedId = if (data.has("currentId") && !data.isNull("currentId"))
+                data.optLong("currentId") else null
+            val index = QueueRestorePlanner.selectedIndex(
+                savedIds, surviving.map { it.first }, savedIndex, savedId
+            )
+            if (index !in songs.indices) return false
+            val sameSong = savedId == songs[index].id ||
+                (savedId == null && savedIds.getOrNull(savedIndex) == songs[index].id)
+            val position = if (sameSong)
+                data.optLong("position", 0L).coerceIn(0L, songs[index].durationMs.coerceAtLeast(0L))
+            else 0L
+            target.setMediaItems(songs.map(::mediaItemFor), index, position)
             target.repeatMode = data.optInt("repeat", Player.REPEAT_MODE_OFF)
             target.shuffleModeEnabled = data.optBoolean("shuffle", false)
             target.prepare()
             target.pause()
-        } catch (failure: Exception) {
-            _error.value = failure.localizedMessage
-                ?: "No se pudo restaurar la sesión de reproducción"
+            true
+        } catch (_: Exception) {
+            false
         }
+    }
+
+    private fun mediaItemFor(song: SongEntity): MediaItem = MediaItem.Builder()
+        .setMediaId(song.id.toString())
+        .setUri(Uri.parse(song.contentUri))
+        .setMediaMetadata(MediaMetadata.Builder()
+            .setTitle(song.title).setArtist(song.artistDisplay)
+            .setAlbumTitle(song.albumTitle).setDurationMs(song.durationMs).build())
+        .build()
+
+    private var activeQueueName: String? = saved.getString("activeQueueName", null)
+    private val _namedQueueNames = MutableStateFlow(readQueueNames())
+    val namedQueueNames: StateFlow<List<String>> = _namedQueueNames
+
+    private fun readQueueNames(): List<String> = runCatching {
+        val data = JSONObject(saved.getString("namedQueues", "{}") ?: "{}")
+        data.keys().asSequence().toList().sorted()
+    }.getOrDefault(emptyList())
+
+    /** Captures the active queue and continues updating its exact playback position. */
+    fun saveNamedQueue(name: String) = scope.launch {
+        val clean = name.trim().take(50)
+        if (clean.isEmpty()) return@launch
+        val player = connect()
+        if (player.mediaItemCount == 0) return@launch
+        snapshotQueue(player, force = true)
+        activeQueueName = clean
+        saved.edit().putString("activeQueueName", clean).apply()
+        snapshotQueue(player, force = true)
+        _namedQueueNames.value = readQueueNames()
+    }
+
+    fun restoreNamedQueue(name: String) = scope.launch {
+        val player = connect()
+        val data = runCatching {
+            JSONObject(saved.getString("namedQueues", "{}") ?: "{}").optJSONObject(name)?.toString()
+        }.getOrNull() ?: return@launch
+        // Save the previous named session before switching to another one.
+        snapshotQueue(player, force = true)
+        val restored = restoreSnapshot(player, data)
+        if (restored) {
+            activeQueueName = name
+            saved.edit().putString("activeQueueName", name).apply()
+            snapshotQueue(player, force = true)
+            publish(player)
+        }
+    }
+
+    fun deleteNamedQueue(name: String) {
+        val data = runCatching { JSONObject(saved.getString("namedQueues", "{}") ?: "{}") }
+            .getOrDefault(JSONObject())
+        data.remove(name)
+        if (activeQueueName == name) activeQueueName = null
+        saved.edit().putString("namedQueues", data.toString())
+            .putString("activeQueueName", activeQueueName).apply()
+        _namedQueueNames.value = readQueueNames()
     }
 
     private fun snapshotQueue(player: Player, force: Boolean = false) {
         if (player.mediaItemCount == 0 || player.currentMediaItemIndex < 0) return
         val now = android.os.SystemClock.elapsedRealtime()
-        if (!force && now - lastSnapshotMs < 4_500L) return
+        if (!force && !PlaybackRefreshPolicy.shouldPersist(lastSnapshotMs, now)) return
         lastSnapshotMs = now
         val data = JSONObject().put("ids", JSONArray().apply {
             for (index in 0 until player.mediaItemCount) {
                 player.getMediaItemAt(index).mediaId.toLongOrNull()?.let(::put)
             }
         }).put("index", player.currentMediaItemIndex)
-            .put("currentId", player.currentMediaItem?.mediaId)
+            .put("currentId", player.currentMediaItem?.mediaId?.toLongOrNull())
             .put("position", player.currentPosition.coerceAtLeast(0L))
             .put("shuffle", player.shuffleModeEnabled)
             .put("repeat", player.repeatMode)
-        scope.launch(Dispatchers.IO) { saved.edit().putString("queue", data.toString()).apply() }
+        // All calls are on the controller's main thread. apply() publishes the new value
+        // immediately and writes it to disk asynchronously. This prevents reordered
+        // IO coroutine jobs from resurrecting an older queue snapshot after pause/seek.
+        val update = saved.edit().putString("queue", data.toString())
+        activeQueueName?.let { name ->
+            val stored = runCatching { JSONObject(saved.getString("namedQueues", "{}") ?: "{}") }
+                .getOrDefault(JSONObject())
+            stored.put(name, data)
+            update.putString("namedQueues", stored.toString())
+        }
+        update.apply()
     }
 
     fun saveSession() { controller?.let { snapshotQueue(it, force = true) } }
@@ -311,7 +401,8 @@ class MusicServiceConnection(
     fun next() = scope.launch { connect().seekToNextMediaItem() }
     fun previous() = scope.launch {
         val p = connect()
-        if (p.currentPosition > 3_000) p.seekTo(0) else p.seekToPreviousMediaItem()
+        if (settings.previousBehavior.value == "previous") p.seekToPreviousMediaItem()
+        else if (p.currentPosition > 3_000) p.seekTo(0) else p.seekToPreviousMediaItem()
     }
     fun toggleShuffle() = scope.launch {
         val p = connect()

@@ -9,6 +9,17 @@ import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.ContentScale
+import coil3.compose.AsyncImage
+import org.koin.compose.koinInject
+import dev.liox.ambermusic.artwork.ArtworkRepository
+import dev.liox.ambermusic.visual.ImmersiveBackdrop
+import dev.liox.ambermusic.settings.AmberSettings
+import androidx.compose.runtime.produceState
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -27,6 +38,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import dev.liox.ambermusic.domain.usecase.SearchMatcher
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
@@ -43,7 +55,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -52,6 +66,11 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.foundation.border
+import dev.liox.ambermusic.profiles.ProfileStore
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
@@ -72,6 +91,8 @@ import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import org.koin.androidx.compose.koinViewModel
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.DropdownMenu
@@ -105,7 +126,8 @@ import dev.liox.ambermusic.viewmodel.LibraryUiState
 import dev.liox.ambermusic.viewmodel.MusicViewModel
 import dev.liox.ambermusic.viewmodel.PlayerUiState
 
-private val bg = Color(0xFF000000)
+private val bg: Color
+    @Composable get() = LocalAmberPalette.current.background
 private val panel: Color
     @Composable get() = LocalAmberPalette.current.surface
 private val secondary: Color
@@ -128,6 +150,7 @@ fun LibraryAndArtistScreens(
     onExitApp: () -> Unit,
     onOpenExtras: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenProfiles: () -> Unit,
     favoritesOpenRequest: Int
 ) {
     val hiddenUris by viewModel.hiddenDuplicates.collectAsState()
@@ -142,7 +165,13 @@ fun LibraryAndArtistScreens(
     var albumKey by rememberSaveable { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     var searchExpanded by rememberSaveable { mutableStateOf(false) }
-    var sort by rememberSaveable { mutableStateOf("Título") }
+    // Persist the user's arrival order independently of the activity and process lifecycle.
+    var sortResetCounter by remember { mutableIntStateOf(0) }
+    var sort by rememberSaveable {
+        mutableStateOf(libraryPreferences.getString("arrival_order", "newest")
+            ?.takeIf { it == "newest" || it == "oldest" } ?: "newest")
+    }
+    LaunchedEffect(sort) { libraryPreferences.edit().putString("arrival_order", sort).apply() }
     var gridMode by rememberSaveable { mutableStateOf(false) }
     var showSort by remember { mutableStateOf(false) }
     var newCategoryDialog by remember { mutableStateOf(false) }
@@ -172,7 +201,7 @@ fun LibraryAndArtistScreens(
         activeArtist != null -> state.artists.firstOrNull { it.id == activeArtist }?.name ?: "Artista"
         activeCategory != null -> state.categories.firstOrNull { it.id == activeCategory }?.name ?: "Categoría"
         activeAlbum != null -> state.albums.firstOrNull { it.albumKey == activeAlbum }?.albumTitle ?: "Álbum"
-        else -> "Biblioteca"
+        else -> "AmberMusic"
     }
     BackHandler(enabled = inDetail || selectedTab != 0) {
         if (inDetail) {
@@ -180,22 +209,43 @@ fun LibraryAndArtistScreens(
             onArtistNavigated()
         } else openSongs()
     }
-    val searchable = remember(state.songs, query, sort) {
+    // Build the accent-folded search index only when the library actually changes.
+    // Typing a character no longer normalizes hundreds of fields on every recomposition.
+    val songSearchIndex = remember(state.songs) {
+        state.songs.associate { song -> song.id to SearchMatcher.makeIndex(
+            song.title, song.artistDisplay, song.albumTitle,
+            song.genre, song.folderPath, song.format
+        ) }
+    }
+    val searchable = remember(state.songs, songSearchIndex, query, sort) {
+        val normalizedQuery = SearchMatcher.normalize(query)
         val matched = state.songs.filter {
             it.durationMs > minSongDurationMs &&
-                (query.isBlank() || it.title.contains(query, ignoreCase = true) ||
-                    it.artistDisplay.contains(query, ignoreCase = true) ||
-                    it.albumTitle.contains(query, ignoreCase = true) ||
-                    it.genre.contains(query, ignoreCase = true) ||
-                    it.folderPath.contains(query, ignoreCase = true) ||
-                    it.format.contains(query, ignoreCase = true))
+                SearchMatcher.matchesIndex(normalizedQuery, songSearchIndex[it.id].orEmpty())
         }
-        when (sort) {
-            "Artista" -> matched.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.artistDisplay })
-            "Recientes" -> matched.sortedByDescending { it.modifiedAtSeconds }
-            "Duración" -> matched.sortedByDescending { it.durationMs }
-            else -> matched.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
-        }
+        val byArrival = matched.sortedWith(compareBy<SongEntity> {
+            it.dateAddedSeconds.takeIf { seconds -> seconds > 0L } ?: it.modifiedAtSeconds
+        }.thenBy { it.id })
+        if (sort == "oldest") byArrival else byArrival.asReversed()
+    }
+
+    val settingsForHome: AmberSettings = koinInject()
+    val profiles: ProfileStore = koinInject()
+    val selectedProfile by profiles.active.collectAsState()
+    val libraryImmersive by settingsForHome.immersive.collectAsState()
+    val visualStyle by settingsForHome.visualStyle.collectAsState()
+    val customBackground by settingsForHome.customBackground.collectAsState()
+    val wallpaperOpacity by settingsForHome.wallpaperOpacity.collectAsState()
+    val allowBackdrop = libraryImmersive && visualStyle != "light" && visualStyle != "amoled" && customBackground.isBlank()
+    val coverStore: ArtworkRepository = koinInject()
+    val ambientStore: ImmersiveBackdrop = koinInject()
+    val coverRevision by coverStore.version.collectAsState()
+    val ambientSong = playing.song
+    val homeAmbient by produceState<dev.liox.ambermusic.visual.AmbientArtwork?>(
+        null, ambientSong?.id, coverRevision, allowBackdrop
+    ) {
+        value = if (allowBackdrop && ambientSong != null)
+            ambientStore.forCover(coverStore.fileFor(ambientSong)) else null
     }
 
     PullToRefreshBox(
@@ -203,23 +253,26 @@ fun LibraryAndArtistScreens(
         onRefresh = { if (hasAudioPermission) viewModel.scanLocalMusic() else onRequestPermission() },
         modifier = Modifier.fillMaxSize()
     ) {
-    Column(Modifier.fillMaxSize().background(bg).pointerInput(inDetail, selectedTab) {
-        var distance = 0f
-        detectHorizontalDragGestures(
-            onDragStart = { distance = 0f },
-            onDragEnd = {
-                if (distance > 100.dp.toPx()) {
-                    if (inDetail) {
-                        favoritesDetail = false; artistId = null; categoryId = null; albumKey = null
-                        onArtistNavigated()
-                    } else selectedTab = (selectedTab - 1).coerceAtLeast(0)
-                } else if (distance < -100.dp.toPx() && !inDetail) {
-                    selectedTab = (selectedTab + 1).coerceAtMost(3)
-                }
-            },
-            onHorizontalDrag = { _, drag -> distance += drag }
-        )
-    }) {
+    Box(Modifier.fillMaxSize().background(bg)) {
+        // Reuse the precomputed ambient bitmap. No runtime blur on scrolling frames.
+        Crossfade(homeAmbient?.file, animationSpec = tween(650), label = "Biblioteca ambiental") { file ->
+            if (file != null && allowBackdrop) {
+                AsyncImage(model = file, contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().alpha(0.40f))
+            }
+        }
+        if (customBackground.isNotBlank()) {
+            AsyncImage(model = customBackground, contentDescription = null,
+                contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().alpha(wallpaperOpacity))
+        }
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
+            0f to bg.copy(alpha = if (visualStyle == "light") .73f else .55f),
+            0.35f to bg.copy(alpha = if (visualStyle == "light") .83f else .78f),
+            1f to bg.copy(alpha = .96f)
+        )))
+    // Tabs are selected by tapping. Do not steal Android edge-back gestures.
+    Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().height(62.dp).padding(start = 12.dp, end = 10.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -231,28 +284,38 @@ fun LibraryAndArtistScreens(
                     categoryId = null
                     albumKey = null
                     onArtistNavigated()
-                }) { Icon(Icons.Filled.ArrowBack, contentDescription = "Volver", tint = Color.White) }
+                }) { Icon(Icons.Filled.ArrowBack, contentDescription = "Volver", tint = LocalAmberPalette.current.foreground) }
             }
             Text(
-                heading, color = Color.White, fontWeight = FontWeight.Bold,
+                heading, color = LocalAmberPalette.current.foreground, fontWeight = FontWeight.Bold,
                 fontSize = if (inDetail) 22.sp else 28.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f).padding(start = 6.dp)
                     .clickable { openSongs() }
             )
             if (!inDetail) {
+                IconButton(onClick = onOpenProfiles) {
+                    if (!selectedProfile.avatar.isNullOrBlank()) {
+                        AsyncImage(model = selectedProfile.avatar, contentDescription = "Perfiles locales",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.size(33.dp).clip(CircleShape)
+                                .border(1.dp, LocalAmberAccent.current, CircleShape))
+                    } else Icon(Icons.Filled.AccountCircle, contentDescription = "Perfiles locales",
+                        tint = LocalAmberAccent.current, modifier = Modifier.size(31.dp))
+                }
                 IconButton(onClick = {
                     if (searchExpanded) query = ""
                     searchExpanded = !searchExpanded
                 }) {
                     Icon(
-                        if (searchExpanded) Icons.Filled.Clear else Icons.Filled.Search,
+                        if (searchExpanded) Icons.Filled.Clear else if (LocalAmberIconStyle.current == "outlined") Icons.Outlined.Search else Icons.Filled.Search,
                         contentDescription = if (searchExpanded) "Cerrar búsqueda" else "Buscar canciones",
                         tint = if (searchExpanded) gold else secondary
                     )
                 }
                 IconButton(onClick = onOpenSettings) {
-                    Icon(Icons.Filled.Settings, contentDescription = "Ajustes", tint = secondary)
+                    Icon(if (LocalAmberIconStyle.current == "outlined") Icons.Outlined.Settings else Icons.Filled.Settings,
+                        contentDescription = "Ajustes", tint = secondary)
                 }
             }
         }
@@ -290,16 +353,36 @@ fun LibraryAndArtistScreens(
                     onClick = { viewModel.playFromAlbum(activeAlbum, it) })
             }
             else -> {
-                LibraryFeatureStrip(playing.song?.title, state.favoriteSongs.size, state.playlists.size, onOpenPlayer)
+                if (!searchExpanded && query.isBlank()) {
+                    LibrarySpotlightSection(
+                        current = playing.song,
+                        recent = state.recentlyPlayed.take(8),
+                        favoritesCount = state.favoriteSongs.size,
+                        playlistsCount = state.playlists.size,
+                        onPlayRecent = { id ->
+                            viewModel.playSelection(state.recentlyPlayed, id)
+                            onOpenPlayer()
+                        },
+                        onOpenPlayer = onOpenPlayer
+                    )
+                }
                 ScrollableTabRow(
                     selectedTabIndex = selectedTab, edgePadding = 12.dp,
-                    containerColor = bg, contentColor = gold,
-                    divider = {}
+                    containerColor = Color.Transparent, contentColor = gold,
+                    divider = {}, indicator = {}
                 ) {
                     listOf("Canciones", "Categorías", "Artistas", "Álbumes").forEachIndexed { index, title ->
                         Tab(selected = selectedTab == index, onClick = { selectedTab = index },
-                            selectedContentColor = Color.White, unselectedContentColor = secondary,
-                            text = { Text(title, maxLines = 1) })
+                            selectedContentColor = LocalAmberPalette.current.foreground, unselectedContentColor = secondary,
+                            text = {
+                                Box(Modifier.clip(RoundedCornerShape(24.dp))
+                                    .background(if (selectedTab == index) LocalAmberAccent.current else Color.Transparent)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                    Text(title, maxLines = 1, color = if (selectedTab == index)
+                                        if (visualStyle == "light") Color.White else Color.Black
+                                        else LocalAmberPalette.current.foreground)
+                                }
+                            })
                     }
                 }
                 AnimatedVisibility(
@@ -343,26 +426,29 @@ fun LibraryAndArtistScreens(
                             Modifier.fillMaxWidth().padding(start = 20.dp, end = 13.dp, top = 10.dp, bottom = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Canciones", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
-                                Text("${searchable.size} canciones · Más de 1 min", color = secondary, fontSize = 12.sp)
-                            }
+                            Text("${searchable.size} canciones", color = secondary,
+                                fontWeight = FontWeight.Medium, fontSize = 13.sp,
+                                modifier = Modifier.weight(1f))
                             Box {
                                 IconButton(onClick = { showSort = true }) {
-                                    Icon(Icons.Filled.Sort, contentDescription = "Ordenar", tint = Color.White)
+                                    Icon(Icons.Filled.Sort, contentDescription = "Ordenar", tint = LocalAmberPalette.current.foreground)
                                 }
                                 DropdownMenu(expanded = showSort, onDismissRequest = { showSort = false },
                                     modifier = Modifier.background(panel)) {
-                                    listOf("Título", "Artista", "Recientes", "Duración").forEach { item ->
-                                        DropdownMenuItem(text = { Text(item, color = Color.White) }, onClick = {
-                                            sort = item; showSort = false
-                                        })
-                                    }
+                                    listOf("newest" to "Más recientes primero", "oldest" to "Más antiguos primero")
+                                        .forEach { (id, label) ->
+                                            DropdownMenuItem(text = {
+                                                Text(if (sort == id) "✓ $label" else label, color = LocalAmberPalette.current.foreground)
+                                            }, onClick = {
+                                                if (sort != id) { sort = id; sortResetCounter++ }
+                                                showSort = false
+                                            })
+                                        }
                                 }
                             }
                             IconButton(onClick = { gridMode = !gridMode }) {
                                 Icon(if (gridMode) Icons.Filled.ViewList else Icons.Filled.GridView,
-                                    contentDescription = if (gridMode) "Vista lista" else "Vista cuadrícula", tint = Color.White)
+                                    contentDescription = if (gridMode) "Vista lista" else "Vista cuadrícula", tint = LocalAmberPalette.current.foreground)
                             }
                         }
                         if (gridMode) {
@@ -370,6 +456,7 @@ fun LibraryAndArtistScreens(
                         } else {
                             SectionTracks(searchable, null,
                                 scrollPreferenceKey = "songs_main",
+                                resetRequest = sortResetCounter,
                                 onClick = { viewModel.playSelection(searchable, it) },
                                 currentSongId = playing.song?.id, locateRequest = locateRequest,
                                 onFavorite = viewModel::toggleFavorite, onPlayNext = viewModel::playNext,
@@ -379,14 +466,14 @@ fun LibraryAndArtistScreens(
                     1 -> {
                         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 7.dp),
                             verticalAlignment = Alignment.CenterVertically) {
-                            Text("Mis categorías", color = Color.White, fontSize = 17.sp,
+                            Text("Mis categorías", color = LocalAmberPalette.current.foreground, fontSize = 17.sp,
                                 fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                             IconButton(onClick = { newCategoryDialog = true }) {
                                 Icon(Icons.Filled.Add, contentDescription = "Nueva categoría", tint = gold)
                             }
                         }
                         LazyColumn {
-                            if (query.isBlank() || "Favoritos".contains(query, ignoreCase = true)) {
+                            if (query.isBlank() || SearchMatcher.matches(query, "Favoritos")) {
                                 item(key = "virtual_favorites") {
                                     Row(Modifier.fillMaxWidth().clickable { favoritesDetail = true }
                                         .padding(horizontal = 22.dp, vertical = 12.dp),
@@ -397,13 +484,13 @@ fun LibraryAndArtistScreens(
                                         }
                                         Spacer(Modifier.width(14.dp))
                                         Column(Modifier.weight(1f)) {
-                                            Text("Favoritos", color = Color.White, fontWeight = FontWeight.SemiBold)
+                                            Text("Favoritos", color = LocalAmberPalette.current.foreground, fontWeight = FontWeight.SemiBold)
                                             Text("${state.favoriteSongs.size} canciones", color = secondary, fontSize = 12.sp)
                                         }
                                     }
                                 }
                             }
-                            items(state.categories.filter { it.name.contains(query, ignoreCase = true) }, key = { it.id }) { category ->
+                            items(state.categories.filter { SearchMatcher.matches(query, it.name) }, key = { it.id }) { category ->
                                 Row(Modifier.fillMaxWidth().clickable { categoryId = category.id }
                                     .padding(horizontal = 22.dp, vertical = 12.dp),
                                     verticalAlignment = Alignment.CenterVertically) {
@@ -412,7 +499,7 @@ fun LibraryAndArtistScreens(
                                         Icon(Icons.Filled.Folder, contentDescription = null, tint = gold)
                                     }
                                     Spacer(Modifier.width(14.dp))
-                                    Text(category.name, color = Color.White, modifier = Modifier.weight(1f),
+                                    Text(category.name, color = LocalAmberPalette.current.foreground, modifier = Modifier.weight(1f),
                                         fontWeight = FontWeight.Medium)
                                     IconButton(onClick = { viewModel.deleteCategory(category.id) }) {
                                         Icon(Icons.Filled.Delete, contentDescription = "Eliminar categoría", tint = secondary)
@@ -423,9 +510,9 @@ fun LibraryAndArtistScreens(
                         }
                     }
                     2 -> LazyColumn {
-                        item { Text("Artistas", color = Color.White, fontWeight = FontWeight.SemiBold,
+                        item { Text("Artistas", color = LocalAmberPalette.current.foreground, fontWeight = FontWeight.SemiBold,
                             fontSize = 17.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp)) }
-                        items(state.artists.filter { it.name.contains(query, ignoreCase = true) }, key = { it.id }) { artist ->
+                        items(state.artists.filter { SearchMatcher.matches(query, it.name) }, key = { it.id }) { artist ->
                             Row(Modifier.fillMaxWidth().clickable { artistId = artist.id }
                                 .padding(horizontal = 20.dp, vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically) {
@@ -435,15 +522,15 @@ fun LibraryAndArtistScreens(
                                         fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
                                 }
                                 Spacer(Modifier.width(15.dp))
-                                Text(artist.name, color = Color.White, modifier = Modifier.weight(1f))
+                                Text(artist.name, color = LocalAmberPalette.current.foreground, modifier = Modifier.weight(1f))
                             }
                         }
                         item { Spacer(Modifier.height(100.dp)) }
                     }
                     else -> {
                         val albums = state.albums.filter { album ->
-                            album.albumTitle.contains(query, ignoreCase = true) ||
-                                state.songs.any { it.albumKey == album.albumKey && it.artistDisplay.contains(query, ignoreCase = true) }
+                            SearchMatcher.matches(query, album.albumTitle) ||
+                                state.songs.any { it.albumKey == album.albumKey && SearchMatcher.matches(query, it.artistDisplay) }
                         }
                         BoxWithConstraints(Modifier.fillMaxSize()) {
                             val cell = (maxWidth - 48.dp) / 2f
@@ -454,7 +541,7 @@ fun LibraryAndArtistScreens(
                                 verticalArrangement = Arrangement.spacedBy(18.dp)
                             ) {
                                 item(span = { GridItemSpan(maxLineSpan) }) {
-                                    Text("Álbumes", color = Color.White, fontSize = 17.sp,
+                                    Text("Álbumes", color = LocalAmberPalette.current.foreground, fontSize = 17.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
                                 }
@@ -466,7 +553,7 @@ fun LibraryAndArtistScreens(
                                         SongArtwork(song = coverSong, size = cell,
                                             modifier = Modifier.clip(RoundedCornerShape(11.dp)))
                                         Spacer(Modifier.height(8.dp))
-                                        Text(album.albumTitle, color = Color.White, fontSize = 13.sp,
+                                        Text(album.albumTitle, color = LocalAmberPalette.current.foreground, fontSize = 13.sp,
                                             fontWeight = FontWeight.SemiBold, maxLines = 1,
                                             overflow = TextOverflow.Ellipsis)
                                         Text("${album.songCount} canciones", color = secondary, fontSize = 11.sp)
@@ -480,6 +567,7 @@ fun LibraryAndArtistScreens(
                 }
             }
         }
+    }
     }
     }
 
@@ -538,37 +626,64 @@ fun LibraryAndArtistScreens(
     }
 }
 
-
 @Composable
-private fun LibraryFeatureStrip(
-    currentTitle: String?,
-    favorites: Int,
-    playlists: Int,
-    openPlayer: () -> Unit
+private fun LibrarySpotlightSection(
+    current: SongEntity?,
+    recent: List<SongEntity>,
+    favoritesCount: Int,
+    playlistsCount: Int,
+    onPlayRecent: (Long) -> Unit,
+    onOpenPlayer: () -> Unit
 ) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 7.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Column(
-            Modifier.weight(1.3f).clip(RoundedCornerShape(22.dp))
-                .background(LocalAmberPalette.current.surfaceRaised)
-                .clickable(enabled = currentTitle != null, onClick = openPlayer)
-                .padding(15.dp)
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text("AHORA SONANDO", color = gold, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(6.dp))
-            Text(currentTitle ?: "Tu música, a tu ritmo", color = Color.White,
-                maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+            Column(
+                Modifier.weight(1.2f).clip(RoundedCornerShape(24.dp))
+                    .background(LocalAmberPalette.current.surfaceRaised.copy(alpha = 0.9f))
+                    .clickable(enabled = current != null, onClick = onOpenPlayer)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("Ahora sonando", color = gold, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text(current?.title ?: "Listo para reproducir", color = LocalAmberPalette.current.foreground, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(current?.artistDisplay ?: "Toca una canción para empezar", color = secondary, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            Column(
+                Modifier.weight(0.8f).clip(RoundedCornerShape(24.dp))
+                    .background(LocalAmberPalette.current.surface.copy(alpha = 0.9f))
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("Tu biblioteca", color = secondary, fontSize = 12.sp)
+                Text("$favoritesCount favoritos", color = LocalAmberPalette.current.foreground, fontWeight = FontWeight.SemiBold)
+                Text("$playlistsCount playlists", color = LocalAmberPalette.current.foreground, fontWeight = FontWeight.SemiBold)
+            }
         }
-        Column(
-            Modifier.weight(0.8f).clip(RoundedCornerShape(22.dp))
-                .background(LocalAmberPalette.current.surface).padding(15.dp)
-        ) {
-            Text("TU MÚSICA", color = gold, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        if (recent.isNotEmpty()) {
+            Text("Seguir escuchando", color = LocalAmberPalette.current.foreground, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp)
+            ) {
+                items(recent, key = { it.id }) { song ->
+                    Column(
+                        Modifier.width(144.dp).clip(RoundedCornerShape(22.dp))
+                            .background(LocalAmberPalette.current.surface.copy(alpha = 0.92f))
+                            .clickable { onPlayRecent(song.id) }
+                            .padding(10.dp)
+                    ) {
+                        SongArtwork(song = song, size = 124.dp)
+                        Spacer(Modifier.height(8.dp))
+                        Text(song.title, color = LocalAmberPalette.current.foreground, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(song.artistDisplay, color = secondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
             Spacer(Modifier.height(6.dp))
-            Text("$favorites favoritos", color = Color.White, fontSize = 12.sp)
-            Text("$playlists listas", color = secondary, fontSize = 12.sp)
         }
     }
 }
@@ -603,8 +718,21 @@ private fun SectionTracks(
     onFavorite: ((Long) -> Unit)? = null,
     onPlayNext: ((SongEntity) -> Unit)? = null,
     onActions: ((SongEntity) -> Unit)? = null,
-    scrollPreferenceKey: String? = null
+    scrollPreferenceKey: String? = null,
+    resetRequest: Int = 0
 ) {
+    val densitySettings: AmberSettings = koinInject()
+    val rowDensity by densitySettings.density.collectAsState()
+    val rowSize = if (rowDensity == "compact") 46.dp else 56.dp
+    val rowPadding = if (rowDensity == "compact") 5.dp else 9.dp
+    val bulkViewModel: MusicViewModel = koinViewModel()
+    val fullLibrary by bulkViewModel.libraryUiState.collectAsState()
+    var selectedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var bulkPlaylistDialog by remember { mutableStateOf(false) }
+    var chosenPlaylists by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    LaunchedEffect(tracks) {
+        selectedIds = selectedIds.intersect(tracks.asSequence().map { it.id }.toSet())
+    }
     val preferenceStore = androidx.compose.ui.platform.LocalContext.current.getSharedPreferences("amber_library_navigation", android.content.Context.MODE_PRIVATE)
     val initialIndex = if (scrollPreferenceKey == null) 0 else preferenceStore.getInt("${scrollPreferenceKey}_index", 0).coerceAtLeast(0)
     val initialOffset = if (scrollPreferenceKey == null) 0 else preferenceStore.getInt("${scrollPreferenceKey}_offset", 0).coerceAtLeast(0)
@@ -618,13 +746,53 @@ private fun SectionTracks(
                 }
         }
     }
+    LaunchedEffect(resetRequest) {
+        if (resetRequest > 0) listState.scrollToItem(0)
+    }
     LaunchedEffect(locateRequest) {
         if (locateRequest > 0) {
             val idx = tracks.indexOfFirst { it.id == currentSongId }
             if (idx >= 0) listState.animateScrollToItem(idx + if (subtitle == null) 0 else 1)
         }
     }
+    if (bulkPlaylistDialog) {
+        AlertDialog(onDismissRequest = { bulkPlaylistDialog = false },
+            title = { Text("Añadir a playlists") },
+            text = { Column {
+                fullLibrary.playlists.forEach { playlist ->
+                    Row(Modifier.fillMaxWidth().clickable {
+                        chosenPlaylists = if (playlist.id in chosenPlaylists)
+                            chosenPlaylists - playlist.id else chosenPlaylists + playlist.id
+                    }, verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = playlist.id in chosenPlaylists, onCheckedChange = {
+                            chosenPlaylists = if (it) chosenPlaylists + playlist.id
+                                else chosenPlaylists - playlist.id
+                        })
+                        Text(playlist.name, maxLines = 1)
+                    }
+                }
+            } },
+            confirmButton = { TextButton(onClick = {
+                bulkViewModel.addManyToPlaylists(selectedIds, chosenPlaylists)
+                selectedIds = emptySet(); chosenPlaylists = emptySet(); bulkPlaylistDialog = false
+            }) { Text("Añadir") } },
+            dismissButton = { TextButton(onClick = { bulkPlaylistDialog = false }) { Text("Cancelar") } })
+    }
     LazyColumn(Modifier.fillMaxSize(), state = listState) {
+        if (selectedIds.isNotEmpty()) {
+            item(key = "bulk_actions") {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text("${selectedIds.size} seleccionadas", modifier = Modifier.weight(1f),
+                        color = gold, fontSize = 12.sp)
+                    TextButton(onClick = {
+                        bulkViewModel.favoriteMany(selectedIds); selectedIds = emptySet()
+                    }) { Text("Favoritas") }
+                    TextButton(onClick = { bulkPlaylistDialog = true }) { Text("Playlists") }
+                    TextButton(onClick = { selectedIds = emptySet() }) { Text("Cerrar") }
+                }
+            }
+        }
         if (subtitle != null) {
             item {
                 Text(subtitle, color = secondary, fontSize = 12.sp,
@@ -644,24 +812,37 @@ private fun SectionTracks(
                         }
                     )
                 }
-                .combinedClickable(onClick = { onClick(song.id) }, onLongClick = { onActions?.invoke(song) })
-                .padding(horizontal = 18.dp, vertical = 9.dp),
+                .background(if (song.id in selectedIds) gold.copy(alpha = 0.13f) else Color.Transparent)
+                .combinedClickable(
+                    onClick = {
+                        if (selectedIds.isNotEmpty()) selectedIds = if (song.id in selectedIds)
+                            selectedIds - song.id else selectedIds + song.id
+                        else onClick(song.id)
+                    },
+                    onLongClick = { selectedIds = if (song.id in selectedIds)
+                        selectedIds - song.id else selectedIds + song.id }
+                )
+                .padding(horizontal = 18.dp, vertical = rowPadding),
                 verticalAlignment = Alignment.CenterVertically) {
-                SongArtwork(song = song, size = 56.dp)
+                SongArtwork(song = song, size = rowSize)
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(song.title, color = if (song.id == currentSongId) gold else Color.White, fontWeight = FontWeight.Medium,
+                    Text(song.title, color = if (song.id == currentSongId) gold else LocalAmberPalette.current.foreground, fontWeight = FontWeight.Medium,
                         fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(5.dp))
                     Text(song.artistDisplay, color = secondary, fontSize = 12.sp,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                if (onRemove != null) {
+                if (song.id in selectedIds) {
+                    Checkbox(checked = true, onCheckedChange = {
+                        selectedIds = selectedIds - song.id
+                    })
+                } else if (onRemove != null) {
                     IconButton(onClick = { onRemove(song.id) }) {
                         Icon(Icons.Filled.Delete, contentDescription = "Quitar de categoría", tint = secondary)
                     }
-                } else {
-                    Icon(Icons.Filled.PlayArrow, contentDescription = "Reproducir", tint = if (song.id == currentSongId) gold else secondary)
+                } else if (song.id == currentSongId) {
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(gold))
                 }
             }
         }
@@ -683,7 +864,7 @@ private fun TracksGrid(tracks: List<SongEntity>, onClick: (Long) -> Unit,
                 Column(Modifier.clickable { onClick(song.id) }) {
                     SongArtwork(song = song, size = cell)
                     Spacer(Modifier.height(8.dp))
-                    Text(song.title, color = if (song.id == currentSongId) gold else Color.White, fontSize = 13.sp,
+                    Text(song.title, color = if (song.id == currentSongId) gold else LocalAmberPalette.current.foreground, fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(song.artistDisplay, color = secondary, fontSize = 11.sp,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
