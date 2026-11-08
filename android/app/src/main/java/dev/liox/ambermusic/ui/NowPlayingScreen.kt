@@ -111,6 +111,14 @@ import dev.liox.ambermusic.settings.AmberSettings
 import dev.liox.ambermusic.domain.usecase.AudioQualityLabel
 import dev.liox.ambermusic.lyrics.LyricLine
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.animation.Crossfade
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.delay
@@ -302,13 +310,16 @@ fun NowPlayingScreen(
             )
         )
         } // end dark immersion layers; light mode keeps neutral background
-        Column(
-            // Keep the system navigation edges free: no drag recognizer on the entire screen.
-            modifier = Modifier.fillMaxSize().safeDrawingPadding()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 23.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
+        BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
+            // Use measured available screen space, not hard-coded full-screen blank panels.
+            val coverDimension = minOf(maxWidth - 46.dp, (maxHeight * 0.36f).coerceIn(232.dp, 316.dp))
+            val lowerControlSpace = (maxHeight - coverDimension - 427.dp).coerceIn(10.dp, 90.dp)
+            Column(
+                // Native back gestures remain owned by Android along both outer edges.
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                    .padding(horizontal = 23.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
             Row(
                 Modifier.fillMaxWidth().height(56.dp)
                     .pointerInput(onBack) {
@@ -341,7 +352,8 @@ fun NowPlayingScreen(
             CoverCarousel(
                 song = song, currentCover = coverUri, queue = queueSongs,
                 artwork = artworkRepository, fitCover = fitCover, reduceMotion = reduceMotion,
-                onPrevious = onPrevious, onNext = onNext
+                onPrevious = onPrevious, onNext = onNext,
+                onDismiss = onBack, coverSize = coverDimension
             )
             Spacer(Modifier.height(17.dp))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -394,7 +406,8 @@ fun NowPlayingScreen(
                 Text(formatTime(state.progress.durationMs.takeIf { it > 0 } ?: song?.durationMs ?: 0),
                     color = muted, fontSize = 11.sp)
             }
-            Spacer(Modifier.height(12.dp))
+            // Push transport and shortcut controls toward the usable lower screen area.
+            Spacer(Modifier.height(lowerControlSpace))
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -465,6 +478,7 @@ fun NowPlayingScreen(
                     modifier = Modifier.padding(horizontal = 11.dp, vertical = 5.dp))
             }
             Spacer(Modifier.height(14.dp))
+            }
         }
     }
 
@@ -605,25 +619,39 @@ fun NowPlayingScreen(
                     }
                 } else {
                     val scrollState = androidx.compose.foundation.lazy.rememberLazyListState()
+                    val density = LocalDensity.current
+                    val activeLineOffset = with(density) { 148.dp.roundToPx() }
                     LaunchedEffect(activeIndex) {
-                        if (activeIndex >= 0) scrollState.animateScrollToItem(activeIndex)
+                        if (activeIndex >= 0) {
+                            // Only scroll when a new timed line begins, not at each media position tick.
+                            if (!reduceMotion) scrollState.animateScrollToItem(activeIndex, scrollOffset = -activeLineOffset)
+                            else scrollState.scrollToItem(activeIndex, scrollOffset = -activeLineOffset)
+                        }
                     }
-                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 460.dp),
-                        state = scrollState, contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp)) {
+                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp),
+                        state = scrollState,
+                        contentPadding = PaddingValues(horizontal = 22.dp, vertical = 150.dp)) {
                         items(lyrics.size) { index ->
                             val line = lyrics[index]
                             val active = index == activeIndex && hasTimedLyrics
+                            val lineColor by animateColorAsState(
+                                targetValue = if (active) amber else pageText.copy(alpha = if (hasTimedLyrics) 0.61f else 0.95f),
+                                animationSpec = tween(if (reduceMotion) 0 else 220), label = "Foco de letra"
+                            )
+                            val lineSize by animateFloatAsState(
+                                targetValue = if (active) 21f else 16f,
+                                animationSpec = tween(if (reduceMotion) 0 else 220), label = "Escala de letra"
+                            )
                             Text(
                                 text = line.text,
-                                color = if (active) amber else pageText.copy(alpha = if (hasTimedLyrics) 0.74f else 0.96f),
-                                fontSize = if (active) 21.sp else 16.sp,
+                                color = lineColor,
+                                fontSize = lineSize.sp,
                                 fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
                                 modifier = Modifier.fillMaxWidth()
                                     .clickable(enabled = line.timeMs >= 0L) { onSeek(line.timeMs) }
-                                    .padding(vertical = 8.dp)
+                                    .padding(vertical = 9.dp)
                             )
                         }
-                        item { Spacer(Modifier.height(22.dp)) }
                     }
                 }
             }
@@ -844,15 +872,29 @@ private fun WaveformSeekbar(positionMs: Long, durationMs: Long, onSeek: (Long) -
     var dragProgress by remember(durationMs) { mutableFloatStateOf(-1f) }
     val active = LocalAmberAccent.current
     val inactive = LocalAmberPalette.current.muted.copy(alpha = 0.48f)
-    val fraction = if (dragProgress >= 0f) dragProgress else if (durationMs > 0L) {
+    val incomingFraction = if (durationMs > 0L) {
         (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
     } else 0f
+    val smoothFraction by animateFloatAsState(
+        targetValue = incomingFraction,
+        animationSpec = tween(durationMillis = 170, easing = FastOutSlowInEasing),
+        label = "Progreso musical sin saltos"
+    )
+    val fraction = if (dragProgress >= 0f) dragProgress else smoothFraction
     Canvas(
-        Modifier.fillMaxWidth().height(37.dp)
+        Modifier.fillMaxWidth(0.83f).height(31.dp)
+            .semantics {
+                contentDescription = "Posición de reproducción: desliza o toca para avanzar"
+                progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
+                setProgress { value ->
+                    if (durationMs > 0L) onSeek((value.coerceIn(0f, 1f) * durationMs).roundToLong())
+                    true
+                }
+            }
             .pointerInput(durationMs) {
                 detectTapGestures { point ->
                     if (durationMs > 0L && size.width > 0)
-                        onSeek((point.x / size.width).coerceIn(0f, 1f).times(durationMs).roundToLong())
+                        onSeek(PlayerGestureLogic.seekPosition(point.x, size.width.toFloat(), durationMs))
                 }
             }
             .pointerInput(durationMs) {
@@ -874,23 +916,23 @@ private fun WaveformSeekbar(positionMs: Long, durationMs: Long, onSeek: (Long) -
             }
     ) {
         val baseline = size.height / 2f
-        val amplitude = 5.3.dp.toPx()
+        val amplitude = 2.8.dp.toPx()
         val wave = Path().apply {
             moveTo(0f, baseline)
             for (i in 1..180) {
                 val x = i / 180f * size.width
-                val y = baseline + sin(i / 180f * (2.0 * PI * 13.5)).toFloat() * amplitude
+                val y = baseline + sin(i / 180f * (2.0 * PI * 10.0)).toFloat() * amplitude
                 lineTo(x, y)
             }
         }
-        drawPath(wave, color = inactive, style = Stroke(width = 2.6.dp.toPx(), cap = StrokeCap.Round))
+        drawPath(wave, color = inactive, style = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round))
         if (fraction > 0f) {
             clipRect(right = (size.width * fraction).coerceIn(0f, size.width)) {
-                drawPath(wave, color = active, style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round))
+                drawPath(wave, color = active, style = Stroke(width = 2.1.dp.toPx(), cap = StrokeCap.Round))
             }
         }
-        drawCircle(Color.White, radius = 5.3.dp.toPx(),
-            center = Offset((size.width * fraction).coerceIn(5.3.dp.toPx(), size.width - 5.3.dp.toPx()),
+        drawCircle(Color.White, radius = 3.9.dp.toPx(),
+            center = Offset((size.width * fraction).coerceIn(3.9.dp.toPx(), size.width - 3.9.dp.toPx()),
                 baseline))
     }
 }
