@@ -23,6 +23,13 @@ class AmberSettings(context: Context) {
                 .apply()
         }
     }
+    // The v2.6 player enables its requested album blur once; user can disable it later.
+    init {
+        if (prefs.getInt("player_blur_revision", 0) < 260) {
+            prefs.edit().putInt("player_blur_revision", 260)
+                .putBoolean("immersive", true).apply()
+        }
+    }
     private var activeProfileId = "default"
     private fun profileKey(key: String, id: String = activeProfileId): String =
         if (id == "default") key else "profile_${id}_$key"

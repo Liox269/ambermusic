@@ -14,6 +14,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
@@ -112,6 +113,7 @@ fun CoverCarousel(
             contentAlignment = Alignment.Center
         ) {
             AnimatedContent(
+                modifier = Modifier.fillMaxSize(),
                 targetState = song?.id to presentedCover,
                 contentKey = { it.first },
                 transitionSpec = {
@@ -126,7 +128,7 @@ fun CoverCarousel(
                         model = cover,
                         contentDescription = "Portada de ${song?.title.orEmpty()}",
                         contentScale = if (fitCover) ContentScale.Fit else ContentScale.Crop,
-                        modifier = Modifier.matchParentSize()
+                        modifier = Modifier.fillMaxSize()
                     )
                 } else {
                     Icon(Icons.Filled.MusicNote, contentDescription = "Portada no disponible",

@@ -81,6 +81,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
@@ -214,7 +215,7 @@ fun NowPlayingScreen(
     val customBackground by localSettings.customBackground.collectAsState()
     val wallpaperOpacity by localSettings.wallpaperOpacity.collectAsState()
     val reduceMotion by localSettings.reduceMotion.collectAsState()
-    val immersiveEnabled = immersiveAllowed && visualStyle != "amoled" && visualStyle != "light" && customBackground.isBlank()
+    val immersiveEnabled = immersiveAllowed && visualStyle != "light" && customBackground.isBlank()
     val lightMode = visualStyle == "light"
     val pageText = LocalAmberPalette.current.foreground
     val pageBackground = LocalAmberPalette.current.background
@@ -238,7 +239,7 @@ fun NowPlayingScreen(
         }
     }
     val atmosphere by animateColorAsState(
-        targetValue = backdrop?.let { Color(it.primary) } ?: Color(0xFF15273C),
+        targetValue = backdrop?.let { Color(it.primary) } ?: Color(0xFF28191F),
         animationSpec = tween(if (reduceMotion) 0 else 260, easing = FastOutSlowInEasing), label = "Atmósfera de portada"
     )
     val atmosphereDark by animateColorAsState(
@@ -263,17 +264,22 @@ fun NowPlayingScreen(
             )
         )
         if (immersiveEnabled) {
+            // The album itself is a blurred fallback while its cached ambient layer renders.
+            // This avoids a plain black player (notably when AMOLED is the selected theme).
             Crossfade(
-                targetState = backdrop?.file,
-                animationSpec = tween(if (reduceMotion) 0 else 260, easing = FastOutSlowInEasing),
-                label = "Transición ambiental sin bloques"
+                targetState = backdrop?.file ?: coverUri,
+                animationSpec = tween(if (reduceMotion) 0 else 300, easing = FastOutSlowInEasing),
+                label = "Transición ambiental de portada"
             ) { image ->
                 if (image != null) {
+                    val isCachedAmbient = image == backdrop?.file
                     AsyncImage(
                         model = image,
                         contentDescription = null,
-                        contentScale = ContentScale.FillBounds,
-                        modifier = Modifier.fillMaxSize().alpha(0.92f)
+                        contentScale = if (isCachedAmbient) ContentScale.FillBounds else ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                            .then(if (isCachedAmbient) Modifier.alpha(0.85f)
+                                else Modifier.blur(54.dp).alpha(0.60f))
                     )
                 }
             }
@@ -305,7 +311,7 @@ fun NowPlayingScreen(
                     0.0f to Color.Black.copy(alpha = 0.33f),
                     0.32f to Color.Black.copy(alpha = 0.03f),
                     0.62f to Color.Black.copy(alpha = 0.11f),
-                    1f to Color.Black.copy(alpha = 0.79f)
+                    1f to Color.Black.copy(alpha = 0.60f)
                 )
             )
         )
@@ -313,7 +319,7 @@ fun NowPlayingScreen(
         BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
             // Use measured available screen space, not hard-coded full-screen blank panels.
             val coverDimension = minOf(maxWidth - 46.dp, (maxHeight * 0.36f).coerceIn(232.dp, 316.dp))
-            val lowerControlSpace = (maxHeight - coverDimension - 427.dp).coerceIn(10.dp, 90.dp)
+            // Controls remain grouped directly below the progress bar, without a large empty gap.
             Column(
                 // Native back gestures remain owned by Android along both outer edges.
                 modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
@@ -406,8 +412,8 @@ fun NowPlayingScreen(
                 Text(formatTime(state.progress.durationMs.takeIf { it > 0 } ?: song?.durationMs ?: 0),
                     color = muted, fontSize = 11.sp)
             }
-            // Push transport and shortcut controls toward the usable lower screen area.
-            Spacer(Modifier.height(lowerControlSpace))
+            // Group transport controls near the waveform instead of leaving a 90 dp void.
+            Spacer(Modifier.height(18.dp))
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
