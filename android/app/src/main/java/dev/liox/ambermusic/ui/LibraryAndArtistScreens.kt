@@ -165,7 +165,7 @@ fun LibraryAndArtistScreens(
     var categoryId by rememberSaveable { mutableStateOf<Long?>(null) }
     var albumKey by rememberSaveable { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
-    var searchExpanded by rememberSaveable { mutableStateOf(false) }
+    var searchExpanded by rememberSaveable { mutableStateOf(true) }
     // Persist the user's arrival order independently of the activity and process lifecycle.
     var sortResetCounter by remember { mutableIntStateOf(0) }
     var sort by rememberSaveable {
@@ -202,7 +202,7 @@ fun LibraryAndArtistScreens(
         activeArtist != null -> state.artists.firstOrNull { it.id == activeArtist }?.name ?: "Artista"
         activeCategory != null -> state.categories.firstOrNull { it.id == activeCategory }?.name ?: "Categoría"
         activeAlbum != null -> state.albums.firstOrNull { it.albumKey == activeAlbum }?.albumTitle ?: "Álbum"
-        else -> "AmberMusic"
+        else -> "Tu biblioteca"
     }
     BackHandler(enabled = inDetail || selectedTab != 0) {
         if (inDetail) {
@@ -365,7 +365,7 @@ fun LibraryAndArtistScreens(
                     })
             }
             else -> {
-                if (!searchExpanded && query.isBlank()) {
+                if (query.isBlank()) {
                     LibrarySpotlightSection(
                         current = playing.song,
                         recent = state.recentlyPlayed.take(8),

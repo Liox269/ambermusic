@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material3.AssistChip
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -148,6 +149,7 @@ fun NowPlayingScreen(
     sleepMinutes: Int,
     lyrics: List<LyricLine>,
     onImportLyrics: () -> Unit,
+    onFetchLrclib: () -> Unit,
     onAdjustLyricsOffset: (Long) -> Unit,
     onClearLyrics: () -> Unit,
     onPickCover: () -> Unit,
@@ -598,7 +600,10 @@ fun NowPlayingScreen(
                     Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("Todavía no hay letras para esta canción.", color = pageText, fontWeight = FontWeight.SemiBold)
                         Text("Puedes importar un archivo .lrc para mostrar la letra y ajustar el desfase dentro de AmberMusic.", color = muted)
-                        Button(onClick = onImportLyrics) { Text("Importar letras") }
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Button(onClick = onImportLyrics) { Text("Importar .lrc") }
+                            TextButton(onClick = onFetchLrclib) { Text("Buscar en LRCLIB", color = amber) }
+                        }
                     }
                 } else {
                     LazyColumn(Modifier.fillMaxWidth().heightIn(max = 460.dp), contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp)) {
@@ -628,7 +633,7 @@ fun NowPlayingScreen(
         ModalBottomSheet(onDismissRequest = { showQueue = false }, containerColor = if (lightMode) Color(0xFFEDF0F5) else Color(0xFF0C1622), contentColor = pageText) {
             Text("Cola de reproducción", fontWeight = FontWeight.Bold, fontSize = 20.sp,
                 modifier = Modifier.padding(horizontal = 22.dp, vertical = 12.dp))
-            LazyColumn(Modifier.fillMaxWidth().height(410.dp)) {
+            LazyColumn(Modifier.fillMaxWidth().fillMaxHeight(0.72f)) {
                 items(queueSongs.size) { index ->
                     val entry = queueSongs[index]
                     Row(Modifier.fillMaxWidth()
@@ -652,6 +657,8 @@ fun NowPlayingScreen(
                         .padding(horizontal = 12.dp, vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically) {
                         Text("${index + 1}", color = amber, modifier = Modifier.width(27.dp))
+                        SongArtwork(song = entry, size = 40.dp)
+                        Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             Text(entry.title, color = pageText, maxLines = 1)
                             Text(entry.artistDisplay, color = muted, fontSize = 12.sp, maxLines = 1)

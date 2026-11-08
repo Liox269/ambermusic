@@ -283,6 +283,9 @@ private fun AmberMusicRoot(
             onMoveQueue = viewModel::moveQueueItem,
             lyrics = currentLyrics,
             onImportLyrics = { lyricsPicker.launch(arrayOf("text/plain", "application/octet-stream", "*/*")) },
+            onFetchLrclib = { viewModel.fetchLyricsFromLrclib { message ->
+                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            } },
             onAdjustLyricsOffset = viewModel::adjustLyricsOffset,
             onClearLyrics = viewModel::clearLyrics,
             namedQueueNames = namedQueueNames,

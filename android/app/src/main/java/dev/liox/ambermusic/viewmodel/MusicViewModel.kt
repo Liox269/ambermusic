@@ -508,6 +508,21 @@ class MusicViewModel(
     fun restoreNamedQueue(name: String) { playbackConnection.restoreNamedQueue(name) }
     fun deleteNamedQueue(name: String) = playbackConnection.deleteNamedQueue(name)
 
+    fun fetchLyricsFromLrclib(onDone: (String) -> Unit) {
+        val song = playerUiState.value.song ?: return
+        viewModelScope.launch {
+            val result = runCatching {
+                lyrics.fetchFromLrclib(song.id, song.title, song.artistDisplay, song.albumTitle, song.durationMs)
+            }
+            result.onSuccess { found ->
+                if (found) lyricsRevision.value += 1
+                onDone(if (found) "Letras descargadas desde LRCLIB" else "No hay letras disponibles o ya tienes un archivo local")
+            }.onFailure {
+                onDone(it.localizedMessage ?: "No se pudo descargar la letra")
+            }
+        }
+    }
+
     fun importLyrics(uri: Uri) {
         val id = playerUiState.value.song?.id ?: return
         viewModelScope.launch {
