@@ -253,7 +253,7 @@ fun NowPlayingScreen(
                 contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().alpha(if (lightMode) wallpaperOpacity * .3f else wallpaperOpacity))
             Box(Modifier.fillMaxSize().background(pageBackground.copy(alpha = if (lightMode) .73f else .34f)))
         }
-        if (!lightMode && visualStyle != "amoled" && customBackground.isBlank()) {
+        if (!lightMode && customBackground.isBlank()) {
         Box(
             Modifier.fillMaxSize().background(
                 Brush.verticalGradient(
