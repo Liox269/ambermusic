@@ -87,6 +87,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.ViewList
@@ -350,7 +351,18 @@ fun LibraryAndArtistScreens(
                 val tracks by trackFlow.collectAsState(initial = emptyList())
                 val songs = tracks.filter { it.isVisible && it.durationMs > minSongDurationMs && it.contentUri !in hiddenUris }
                 SectionTracks(songs, "${songs.size} canciones · Orden original del álbum",
-                    onClick = { viewModel.playFromAlbum(activeAlbum, it) })
+                    onClick = { viewModel.playFromAlbum(activeAlbum, it) },
+                    header = {
+                        AlbumDetailHero(
+                            title = heading,
+                            songs = songs,
+                            onPlay = { songs.firstOrNull()?.let { viewModel.playFromAlbum(activeAlbum, it.id) } },
+                            onShuffle = {
+                                if (!playing.playback.shuffleModeEnabled) viewModel.toggleShuffle()
+                                songs.firstOrNull()?.let { viewModel.playFromAlbum(activeAlbum, it.id) }
+                            }
+                        )
+                    })
             }
             else -> {
                 if (!searchExpanded && query.isBlank()) {
@@ -689,6 +701,41 @@ private fun LibrarySpotlightSection(
 }
 
 @Composable
+private fun AlbumDetailHero(title: String, songs: List<SongEntity>, onPlay: () -> Unit, onShuffle: () -> Unit) {
+    val accent = LocalAmberAccent.current
+    Column(
+        Modifier.fillMaxWidth().background(
+            Brush.verticalGradient(listOf(accent.copy(alpha = 0.23f), Color.Transparent))
+        ).padding(horizontal = 18.dp, vertical = 14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(9.dp)
+    ) {
+        SongArtwork(song = songs.firstOrNull(), size = 186.dp,
+            modifier = Modifier.clip(RoundedCornerShape(26.dp)))
+        Text(title, color = LocalAmberPalette.current.foreground, fontSize = 23.sp,
+            fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(
+            listOfNotNull(songs.firstOrNull()?.artistDisplay,
+                "${songs.size} canciones", "${songs.sumOf { it.durationMs } / 60000} min").joinToString(" · "),
+            color = LocalAmberPalette.current.muted, fontSize = 12.sp,
+            maxLines = 2, overflow = TextOverflow.Ellipsis
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(onClick = onPlay, enabled = songs.isNotEmpty()) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                Spacer(Modifier.width(4.dp))
+                Text("Reproducir")
+            }
+            androidx.compose.material3.OutlinedButton(onClick = onShuffle, enabled = songs.isNotEmpty()) {
+                Icon(Icons.Filled.Shuffle, contentDescription = null)
+                Spacer(Modifier.width(4.dp))
+                Text("Aleatorio")
+            }
+        }
+    }
+}
+
+@Composable
 private fun CategoryCreateDialog(onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     var title by remember { mutableStateOf("") }
     AlertDialog(
@@ -719,7 +766,8 @@ private fun SectionTracks(
     onPlayNext: ((SongEntity) -> Unit)? = null,
     onActions: ((SongEntity) -> Unit)? = null,
     scrollPreferenceKey: String? = null,
-    resetRequest: Int = 0
+    resetRequest: Int = 0,
+    header: (@Composable () -> Unit)? = null
 ) {
     val densitySettings: AmberSettings = koinInject()
     val rowDensity by densitySettings.density.collectAsState()
@@ -779,6 +827,7 @@ private fun SectionTracks(
             dismissButton = { TextButton(onClick = { bulkPlaylistDialog = false }) { Text("Cancelar") } })
     }
     LazyColumn(Modifier.fillMaxSize(), state = listState) {
+        if (header != null) item(key = "detail_hero") { header() }
         if (selectedIds.isNotEmpty()) {
             item(key = "bulk_actions") {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
