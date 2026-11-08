@@ -11,6 +11,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionParameters
 import dev.liox.ambermusic.settings.AmberSettings
 import dev.liox.ambermusic.audio.ReplayGainReader
+import dev.liox.ambermusic.audio.NativeEqualizerManager
 import dev.liox.ambermusic.widget.AmberWidgetProvider
 import android.net.Uri
 import kotlinx.coroutines.delay
@@ -49,6 +50,7 @@ class MusicPlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private lateinit var player: ExoPlayer
     private lateinit var crossfade: CrossfadeCoordinator
+    private lateinit var nativeEqualizer: NativeEqualizerManager
     private var artworkJob: Job? = null
     private var audioId: Int = C.AUDIO_SESSION_ID_UNSET
     private var lastWidgetSnapshot: WidgetSnapshot? = null
@@ -64,6 +66,7 @@ class MusicPlaybackService : MediaSessionService() {
             .setUsage(C.USAGE_MEDIA)
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .build()
+        nativeEqualizer = NativeEqualizerManager(this)
         player = ExoPlayer.Builder(this)
             .setAudioAttributes(attributes, true)
             .setHandleAudioBecomingNoisy(true)
@@ -151,11 +154,17 @@ class MusicPlaybackService : MediaSessionService() {
 
             override fun onAudioSessionIdChanged(audioSessionId: Int) {
                 audioId = audioSessionId
+                nativeEqualizer.updateSession(audioSessionId)
                 mediaSession?.setSessionExtras(Bundle().apply {
                     putInt(EXTRA_AUDIO_SESSION_ID, audioSessionId)
                 })
             }
         })
+        serviceScope.launch {
+            routeTracker.route.collectLatest { route ->
+                nativeEqualizer.updateRoute(route.name, route.bluetooth)
+            }
+        }
         serviceScope.launch {
             combine(settings.replayGain, settings.autoOutputProfiles,
                 settings.routePresets, routeTracker.route) { _, _, _, _ -> Unit }
@@ -250,6 +259,7 @@ class MusicPlaybackService : MediaSessionService() {
         rampJob?.cancel()
         widgetJob?.cancel()
         crossfade.stop()
+        nativeEqualizer.close()
         AmberWidgetProvider.update(this, null, null, false)
         serviceScope.cancel()
         mediaSession?.release()

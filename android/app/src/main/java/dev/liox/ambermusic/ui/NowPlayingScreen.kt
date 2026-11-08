@@ -182,6 +182,7 @@ fun NowPlayingScreen(
     var showQualityInfo by remember { mutableStateOf(false) }
     var showQualityDetails by remember { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
+    var showEqualizer by remember { mutableStateOf(false) }
     var showLyrics by remember { mutableStateOf(false) }
     var showSaveQueue by remember { mutableStateOf(false) }
     var showQueueProfiles by remember { mutableStateOf(false) }
@@ -189,7 +190,7 @@ fun NowPlayingScreen(
     var showTimer by remember { mutableStateOf(false) }
     var showEdit by remember { mutableStateOf(false) }
     BackHandler(enabled = !showArtists && !showOptions && !showRoute &&
-        !showQueue && !showLyrics && !showTimer && !showEdit &&
+        !showQueue && !showEqualizer && !showLyrics && !showTimer && !showEdit &&
         !showSaveQueue && !showQueueProfiles && !showSavePlaylist, onBack = onBack)
     val localSettings: AmberSettings = koinInject()
     val immersiveAllowed by localSettings.immersive.collectAsState()
@@ -445,7 +446,7 @@ fun NowPlayingScreen(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 QuickActionPill(Modifier.weight(1f), Icons.Filled.TextFields, "Letras") { showLyrics = true }
                 QuickActionPill(Modifier.weight(1f), Icons.Filled.QueueMusic, "Cola") { showQueue = true }
-                QuickActionPill(Modifier.weight(1f), Icons.Filled.MoreHoriz, "Audio") { showQualityInfo = true }
+                QuickActionPill(Modifier.weight(1f), Icons.Filled.MoreHoriz, "EQ") { showEqualizer = true }
                 QuickActionPill(Modifier.weight(1f), Icons.Filled.Timer, "Timer") { showTimer = true }
             }
             Spacer(Modifier.weight(0.32f))
@@ -502,7 +503,7 @@ fun NowPlayingScreen(
                 "Guardar cola como playlist" to { showSavePlaylist = true },
                 "Editar metadatos" to { showEdit = true },
                 "Temporizador" to { showTimer = true },
-                "Ecualizador del sistema" to { onOpenEqualizer() }
+                "Ecualizador AmberMusic" to { showEqualizer = true }
             ).forEach { (label, action) ->
                 Text(label, color = pageText,
                     modifier = Modifier.fillMaxWidth().clickable { showOptions = false; action() }
@@ -619,6 +620,10 @@ fun NowPlayingScreen(
         }
     }
 
+    if (showEqualizer) {
+        NativeEqualizerSheet(routeName = state.route.name, bluetooth = state.route.bluetooth,
+            onDismiss = { showEqualizer = false }, onSystemEqualizer = onOpenEqualizer)
+    }
     if (showQueue) {
         ModalBottomSheet(onDismissRequest = { showQueue = false }, containerColor = if (lightMode) Color(0xFFEDF0F5) else Color(0xFF0C1622), contentColor = pageText) {
             Text("Cola de reproducción", fontWeight = FontWeight.Bold, fontSize = 20.sp,

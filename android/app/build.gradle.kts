@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "dev.liox.ambermusic"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "dev.liox.ambermusic"
