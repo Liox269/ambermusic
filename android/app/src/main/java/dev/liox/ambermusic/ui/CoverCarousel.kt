@@ -76,29 +76,12 @@ fun CoverCarousel(
     val nextCover by produceState<java.io.File?>(null, next?.id, next?.modifiedAtSeconds) {
         value = next?.let { artwork.fileFor(it) }
     }
-    BoxWithConstraints(Modifier.fillMaxWidth().aspectRatio(1.02f)) {
-        val side = maxWidth * 0.39f
-        val main = maxWidth * 0.96f
-        val corner = RoundedCornerShape(LocalAmberCorners.current)
-        if (previousCover != null) {
-            AsyncImage(
-                model = previousCover, contentDescription = "Anterior: ${previous?.title}",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.align(Alignment.CenterStart)
-                    .offset(x = -side * 0.52f).size(side).clip(corner).clickable { onPrevious() }
-            )
-        }
-        if (nextCover != null) {
-            AsyncImage(
-                model = nextCover, contentDescription = "Siguiente: ${next?.title}",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.align(Alignment.CenterEnd)
-                    .offset(x = side * 0.52f).size(side).clip(corner).clickable { onNext() }
-            )
-        }
+    BoxWithConstraints(Modifier.fillMaxWidth().height(306.dp)) {
+        val squareSize = minOf(maxWidth, maxHeight - 4.dp)
         Box(
-            Modifier.align(Alignment.Center).size(main).clip(corner)
-                .background(LocalAmberPalette.current.background)
+            Modifier.align(Alignment.Center).size(squareSize)
+                .clip(RoundedCornerShape(24.dp))
+                .background(LocalAmberPalette.current.surfaceRaised)
                 .pointerInput(song?.id) {
                     var distance = 0f
                     detectHorizontalDragGestures(
@@ -111,34 +94,26 @@ fun CoverCarousel(
                     )
                 }, contentAlignment = Alignment.Center
         ) {
-            // Fill the full artwork surface; no flat gray letterbox behind wide covers.
             if (presentedCover != null && fitCover) {
                 AsyncImage(model = presentedCover, contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.matchParentSize().alpha(0.38f))
+                    modifier = Modifier.matchParentSize().alpha(0.28f))
             }
             AnimatedContent(
                 targetState = presentedCover,
                 contentKey = { it?.toString() },
                 transitionSpec = {
-                    val duration = if (reduceMotion) 0 else 250
-                    (slideInHorizontally(
-                        initialOffsetX = { width -> if (forward) width else -width },
-                        animationSpec = tween(duration, easing = FastOutSlowInEasing)) +
-                        fadeIn(tween(duration))) togetherWith
-                        (slideOutHorizontally(
-                            targetOffsetX = { width -> if (forward) -width else width },
-                            animationSpec = tween(duration, easing = FastOutSlowInEasing)) +
-                        fadeOut(tween(duration)))
+                    val duration = if (reduceMotion) 0 else 220
+                    (fadeIn(tween(duration))) togetherWith fadeOut(tween(duration))
                 },
-                label = "Cambio de portada"
+                label = "Carátula"
             ) { cover ->
                 if (cover != null) AsyncImage(
                     model = cover, contentDescription = "Portada de ${song?.title.orEmpty()}",
                     contentScale = if (fitCover) ContentScale.Fit else ContentScale.Crop,
                     modifier = Modifier.matchParentSize()
                 ) else Icon(Icons.Filled.MusicNote, contentDescription = null,
-                    tint = Color.LightGray, modifier = Modifier.size(62.dp))
+                    tint = LocalAmberPalette.current.muted, modifier = Modifier.size(60.dp))
             }
         }
     }

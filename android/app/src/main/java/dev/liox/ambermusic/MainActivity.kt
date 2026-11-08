@@ -40,6 +40,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.QueueMusic
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -68,6 +72,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.liox.ambermusic.ui.LibraryAndArtistScreens
 import dev.liox.ambermusic.ui.NowPlayingScreen
 import dev.liox.ambermusic.ui.ExtrasScreen
@@ -112,7 +117,7 @@ class MainActivity : ComponentActivity() {
             val theme by amberSettings.theme.collectAsState()
             val visualStyle by amberSettings.visualStyle.collectAsState()
             val originalType = remember { Typography() }
-            val displayFamily = if (fontChoice == "expressive") FontFamily.Serif else FontFamily.SansSerif
+            val displayFamily = FontFamily.SansSerif
             val appType = remember(displayFamily) {
                 originalType.copy(
                     bodyLarge = originalType.bodyLarge.copy(fontFamily = FontFamily.SansSerif),
@@ -177,6 +182,7 @@ private fun AmberMusicRoot(
     val library by viewModel.libraryUiState.collectAsState()
     val player by viewModel.playerUiState.collectAsState()
     val queueIds by viewModel.queueIds.collectAsState()
+    var searchRequest by rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
     val namedQueueNames by viewModel.namedQueues.collectAsState()
     val currentLyrics by viewModel.currentLyrics.collectAsState()
     val songsById = remember(library.songs) { library.songs.associateBy { it.id } }
@@ -333,7 +339,8 @@ private fun AmberMusicRoot(
                 onOpenExtras = { openExtrasOnSettings = false; openExtrasOnProfiles = false; showExtras = true },
                 onOpenSettings = { openExtrasOnSettings = true; openExtrasOnProfiles = false; showExtras = true },
                 onOpenProfiles = { openExtrasOnSettings = false; openExtrasOnProfiles = true; showExtras = true },
-                favoritesOpenRequest = favoritesOpenRequest
+                favoritesOpenRequest = favoritesOpenRequest,
+                searchRequest = searchRequest
             )
             if (player.song != null) {
                 val song = player.song
@@ -351,18 +358,18 @@ private fun AmberMusicRoot(
                                 onVerticalDrag = { _, amount -> verticalDelta += amount }
                             )
                         }
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                        .shadow(10.dp, RoundedCornerShape(LocalAmberCorners.current))
+                        .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 70.dp)
+                        .shadow(5.dp, RoundedCornerShape(22.dp))
                         .clip(RoundedCornerShape(LocalAmberCorners.current))
                         .background(LocalAmberPalette.current.surfaceRaised.copy(alpha = 0.96f))
                 ) {
                     androidx.compose.foundation.layout.Row(
                         Modifier.fillMaxWidth().clickable { showPlayer = true }
-                            .padding(start = 10.dp, end = 5.dp, top = 8.dp, bottom = 7.dp),
+                            .padding(start = 9.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        dev.liox.ambermusic.ui.SongArtwork(song = song, size = 46.dp)
-                        Spacer(Modifier.width(12.dp))
+                        dev.liox.ambermusic.ui.SongArtwork(song = song, size = 40.dp)
+                        Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             Text(song?.title.orEmpty(), color = LocalAmberPalette.current.foreground,
                                 fontWeight = FontWeight.SemiBold, maxLines = 1,
@@ -380,18 +387,48 @@ private fun AmberMusicRoot(
                                 modifier = Modifier.size(28.dp)
                             )
                         }
-                        IconButton(onClick = viewModel::next) {
-                            Icon(if (LocalAmberIconStyle.current == "outlined") Icons.Outlined.SkipNext else Icons.Filled.SkipNext,
-                                contentDescription = "Siguiente", tint = LocalAmberPalette.current.foreground)
-                        }
                     }
-                    Box(Modifier.fillMaxWidth().height(3.dp).background(LocalAmberPalette.current.surface)) {
-                        Box(Modifier.fillMaxWidth(progress).height(3.dp).background(LocalAmberAccent.current))
+                    Box(Modifier.fillMaxWidth().height(2.dp).background(LocalAmberPalette.current.muted.copy(alpha = 0.24f))) {
+                        Box(Modifier.fillMaxWidth(progress).height(2.dp).background(LocalAmberAccent.current))
                     }
+                }
+            }
+            // Reference design: navigation stays separate from the compact mini-player.
+            androidx.compose.foundation.layout.Row(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(61.dp)
+                    .background(Color(0xFF0F0C14)).padding(horizontal = 8.dp),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AmberNavItem("Biblioteca", androidx.compose.material.icons.Icons.Filled.LibraryMusic, true) { }
+                AmberNavItem("Buscar", androidx.compose.material.icons.Icons.Filled.Search, false) { searchRequest++ }
+                AmberNavItem("Listas", androidx.compose.material.icons.Icons.Filled.QueueMusic, false) {
+                    openExtrasOnSettings = false; openExtrasOnProfiles = false; showExtras = true
+                }
+                AmberNavItem("Ajustes", androidx.compose.material.icons.Icons.Filled.Tune, false) {
+                    openExtrasOnSettings = true; openExtrasOnProfiles = false; showExtras = true
                 }
             }
         }
         }
     }
+    }
+}
+
+@Composable
+private fun androidx.compose.foundation.layout.RowScope.AmberNavItem(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    selected: Boolean,
+    action: () -> Unit
+) {
+    Column(Modifier.weight(1f).clickable(onClick = action),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(2.dp)) {
+        Icon(icon, contentDescription = title,
+            tint = if (selected) LocalAmberAccent.current else LocalAmberPalette.current.muted,
+            modifier = Modifier.size(22.dp))
+        Text(title, fontSize = 10.sp,
+            color = if (selected) LocalAmberAccent.current else LocalAmberPalette.current.muted)
     }
 }

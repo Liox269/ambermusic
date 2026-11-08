@@ -262,7 +262,7 @@ fun ExtrasScreen(
             2 -> SmartPlaylistsPanel(library, viewModel, onPlayer)
             3 -> DuplicatesPanel(library, viewModel)
             5 -> DuplicatesPanel(library, viewModel)
-            4 -> SettingsHomeV21(onNavigate = { tab = it })
+            4 -> SettingsHomeV21(viewModel = viewModel, onNavigate = { tab = it })
             14 -> ProfilesScreen(library = library, onOpenThemeEditor = { tab = 15 }, onOpenFavorites = onOpenFavorites)
             15 -> ThemeStudioScreen()
             10 -> LazyColumn(Modifier.fillMaxSize().padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {

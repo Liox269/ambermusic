@@ -29,46 +29,102 @@ import kotlin.math.roundToInt
 
 /* Responsive settings: no long help text and no low-contrast palette labels. */
 @Composable
-internal fun SettingsHomeV21(onNavigate: (Int) -> Unit) {
+internal fun SettingsHomeV21(viewModel: MusicViewModel, onNavigate: (Int) -> Unit) {
     val palette = LocalAmberPalette.current
+    val style by viewModel.visualStyle.collectAsState()
+    val immersive by viewModel.immersive.collectAsState()
+    val reduceMotion by viewModel.reduceMotion.collectAsState()
+    val gain by viewModel.replayGain.collectAsState()
+    val crossfade by viewModel.smoothTransition.collectAsState()
     LazyColumn(
-        Modifier.fillMaxSize().padding(horizontal = 17.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(bottom = 108.dp, top = 4.dp)
+        Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(bottom = 90.dp, top = 4.dp)
     ) {
+        item { SettingsCategoryTitle("APARIENCIA") }
         item {
-            Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(26.dp))
-                    .background(palette.surfaceRaised)
-                    .padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text("AmberMusic", color = palette.accent, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-                Text("Panel de personalización", color = palette.foreground, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Text("Accede más rápido a apariencia, audio, rendimiento y tus perfiles locales.", color = palette.muted, style = MaterialTheme.typography.bodyMedium)
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+                .background(palette.surface), verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                AmberSettingsToggle("Negro puro (AMOLED)",
+                    "Fondos negros para mejorar batería y contraste",
+                    style == "amoled", { viewModel.setVisualStyle(if (it) "amoled" else "immersive") })
+                HorizontalDivider(color = palette.muted.copy(alpha = .12f))
+                AmberSettingsToggle("Colores de la portada",
+                    "El reproductor adapta la atmósfera al álbum",
+                    style != "amoled", { viewModel.setVisualStyle(if (it) "immersive" else "amoled") })
+                HorizontalDivider(color = palette.muted.copy(alpha = .12f))
+                AmberSettingsToggle("Fondo difuminado en caché",
+                    "Transiciones suaves sin recalcular el fondo continuamente",
+                    immersive, viewModel::setImmersive)
+                HorizontalDivider(color = palette.muted.copy(alpha = .12f))
+                AmberSettingsToggle("Reducir movimiento",
+                    "Quita animaciones y transiciones largas",
+                    reduceMotion, viewModel::setReduceMotion)
             }
         }
-        item { Text("Accesos principales", color = palette.foreground, fontWeight = FontWeight.SemiBold) }
+        item { SettingsCategoryTitle("AUDIO") }
         item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                SettingTileV21("Apariencia", Icons.Filled.Palette, "Temas y portadas", Modifier.weight(1f)) { onNavigate(7) }
-                SettingTileV21("Audio", Icons.Filled.Headphones, "Crossfade y ReplayGain", Modifier.weight(1f)) { onNavigate(9) }
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+                .background(palette.surface)) {
+                AmberSettingsToggle("Reproducción sin pausas",
+                    "Continuidad entre pistas compatibles",
+                    true, { onNavigate(11) }, enabled = false)
+                HorizontalDivider(color = palette.muted.copy(alpha = .12f))
+                AmberSettingsToggle("ReplayGain",
+                    "Iguala el volumen percibido cuando hay metadatos",
+                    gain != "off", { viewModel.setReplayGain(if (it) "track" else "off") })
+                HorizontalDivider(color = palette.muted.copy(alpha = .12f))
+                AmberSettingsToggle("Crossfade experimental",
+                    "Transición entre canciones compatibles",
+                    crossfade, viewModel::setSmoothTransitions)
+                HorizontalDivider(color = palette.muted.copy(alpha = .12f))
+                SettingDestinationV21("Ecualizador y perfiles por salida", "Altavoz, cable y Bluetooth", Icons.Filled.Equalizer) { onNavigate(9) }
             }
         }
+        item { SettingsCategoryTitle("BIBLIOTECA Y LETRAS") }
         item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                SettingTileV21("Rendimiento", Icons.Filled.Speed, "HyperOS y energía", Modifier.weight(1f)) { onNavigate(12) }
-                SettingTileV21("Perfiles", Icons.Filled.AccountCircle, "Favoritos y avatar", Modifier.weight(1f)) { onNavigate(14) }
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+                .background(palette.surface)) {
+                SettingDestinationV21("Carpetas y escaneo", "Selecciona la música que deseas mostrar", Icons.Filled.FolderOpen) { onNavigate(6) }
+                HorizontalDivider(color = palette.muted.copy(alpha = .12f))
+                SettingDestinationV21("Duplicados", "Oculta copias sin borrar archivos", Icons.Filled.ContentCopy) { onNavigate(5) }
+                HorizontalDivider(color = palette.muted.copy(alpha = .12f))
+                SettingDestinationV21("Temas y personalización", "Más colores, iconos y fondos", Icons.Filled.Palette) { onNavigate(7) }
             }
         }
-        item { Text("Más opciones", color = palette.foreground, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp)) }
-        item { SettingDestinationV21("Editor de temas", "Personaliza colores y fondos", Icons.Filled.ColorLens) { onNavigate(15) } }
-        item { SettingDestinationV21("Reproducción", "Continuidad y colas", Icons.Filled.QueueMusic) { onNavigate(11) } }
-        item { SettingDestinationV21("Biblioteca", "Carpetas, filtros y escaneo", Icons.Filled.FolderOpen) { onNavigate(6) } }
-        item { SettingDestinationV21("Duplicados", "Copias ocultas sin borrar archivos", Icons.Filled.ContentCopy) { onNavigate(5) } }
-        item { SettingDestinationV21("Datos y respaldo", "Exportar y recuperar ajustes", Icons.Filled.CloudDownload) { onNavigate(13) } }
-        item { Spacer(Modifier.height(5.dp)); Text("AmberMusic · v2.3.0-beta1", color = palette.muted,
-            modifier = Modifier.fillMaxWidth(), style = MaterialTheme.typography.labelSmall) }
+        item { SettingsCategoryTitle("SISTEMA Y DATOS") }
+        item { SettingDestinationV21("Rendimiento e HyperOS", "Permisos y energía comprobables", Icons.Filled.Speed) { onNavigate(12) } }
+        item { SettingDestinationV21("Perfiles locales", "Avatar y preferencias", Icons.Filled.AccountCircle) { onNavigate(14) } }
+        item { SettingDestinationV21("Datos y respaldo", "Exporta antes de reinstalar la aplicación", Icons.Filled.CloudDownload) { onNavigate(13) } }
+        item { Text("AmberMusic · Rediseño 2.4 · Los cambios de audio respetan las capacidades de Android.",
+            color = palette.muted, style = MaterialTheme.typography.labelSmall) }
+    }
+}
+
+@Composable
+private fun SettingsCategoryTitle(title: String) {
+    Text(title, color = LocalAmberPalette.current.muted, style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 5.dp, top = 8.dp, bottom = 1.dp))
+}
+
+@Composable
+private fun AmberSettingsToggle(title: String, description: String, checked: Boolean,
+    onChange: (Boolean) -> Unit, enabled: Boolean = true) {
+    val palette = LocalAmberPalette.current
+    Row(Modifier.fillMaxWidth().clickable(enabled = enabled) { onChange(!checked) }
+        .padding(horizontal = 13.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = palette.foreground, fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(3.dp))
+            Text(description, color = palette.muted,
+                style = MaterialTheme.typography.bodySmall, maxLines = 2)
+        }
+        Spacer(Modifier.width(9.dp))
+        Switch(checked = checked, enabled = enabled, onCheckedChange = onChange,
+            modifier = Modifier.height(32.dp),
+            colors = SwitchDefaults.colors(checkedTrackColor = palette.accent,
+                checkedThumbColor = Color(0xFF190D13)))
     }
 }
 

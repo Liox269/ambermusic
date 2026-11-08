@@ -9,6 +9,20 @@ import dev.liox.ambermusic.profiles.ProfileRules
 /** Small settings store: no network, no polling and no database migration. */
 class AmberSettings(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("amber_settings", Context.MODE_PRIVATE)
+    // One-time visual reset for the reference redesign. Audio, favorites, lists and Room remain unchanged.
+    init {
+        if (prefs.getInt("redesign_revision", 0) < 240) {
+            prefs.edit().putInt("redesign_revision", 240)
+                .putString("theme", "coral")
+                .putString("visual_style", "immersive")
+                .putString("font_choice", "system")
+                .putString("accent_hex", "")
+                .putString("custom_background", "")
+                .putString("density", "compact")
+                .putBoolean("fit_cover", false)
+                .apply()
+        }
+    }
     private var activeProfileId = "default"
     private fun profileKey(key: String, id: String = activeProfileId): String =
         if (id == "default") key else "profile_${id}_$key"
@@ -171,7 +185,7 @@ class AmberSettings(context: Context) {
         require(ProfileRules.validIdentifier(id))
         activeProfileId = id
         _theme.value = dev.liox.ambermusic.ui.AmberPalettes.fromId(
-            prefs.getString(profileKey("theme"), if (id == "default") "blue" else "cherry") ?: "cherry").id
+            prefs.getString(profileKey("theme"), if (id == "default") "coral" else "cherry") ?: "cherry").id
         _visualStyle.value = prefs.getString(profileKey("visual_style"), "immersive") ?: "immersive"
         _density.value = prefs.getString(profileKey("density"), "comfortable") ?: "comfortable"
         _reduceMotion.value = prefs.getBoolean(profileKey("reduce_motion"), false)
