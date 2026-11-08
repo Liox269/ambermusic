@@ -25,7 +25,7 @@ jobs:
           SDK_MANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           if [ ! -x "$SDK_MANAGER" ]; then SDK_MANAGER="$(command -v sdkmanager)"; fi
           yes | "$SDK_MANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null || true
-          "$SDK_MANAGER" --sdk_root="$SDK_ROOT" 'platforms;android-37' 'build-tools;36.0.0' 'platform-tools'
+          "$SDK_MANAGER" --sdk_root="$SDK_ROOT" 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools'
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.6.0'
