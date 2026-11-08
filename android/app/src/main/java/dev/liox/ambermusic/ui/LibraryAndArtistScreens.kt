@@ -117,6 +117,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -167,7 +170,15 @@ fun LibraryAndArtistScreens(
     var albumKey by rememberSaveable { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     var searchExpanded by rememberSaveable { mutableStateOf(true) }
-    LaunchedEffect(searchRequest) { if (searchRequest > 0) searchExpanded = true }
+    val searchFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    LaunchedEffect(searchRequest) {
+        if (searchRequest > 0) {
+            searchExpanded = true
+            searchFocusRequester.requestFocus()
+            keyboardController?.show()
+        }
+    }
     // Persist the user's arrival order independently of the activity and process lifecycle.
     var sortResetCounter by remember { mutableIntStateOf(0) }
     var sort by rememberSaveable {
@@ -322,7 +333,7 @@ fun LibraryAndArtistScreens(
                     } else Icon(Icons.Filled.Tune, contentDescription = "Buscar", tint = secondary, modifier = Modifier.size(18.dp))
                 },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp).height(50.dp)
-                    .clip(RoundedCornerShape(28.dp)),
+                    .clip(RoundedCornerShape(28.dp)).focusRequester(searchFocusRequester),
                 colors = androidx.compose.material3.TextFieldDefaults.colors(
                     focusedContainerColor = LocalAmberPalette.current.surface,
                     unfocusedContainerColor = LocalAmberPalette.current.surface,
