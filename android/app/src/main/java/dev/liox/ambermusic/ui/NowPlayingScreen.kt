@@ -205,6 +205,7 @@ fun NowPlayingScreen(
     var showSavePlaylist by remember { mutableStateOf(false) }
     var showTimer by remember { mutableStateOf(false) }
     var showEdit by remember { mutableStateOf(false) }
+    BackHandler(enabled = showLyrics) { showLyrics = false }
     BackHandler(enabled = !showArtists && !showOptions && !showRoute &&
         !showQueue && !showEqualizer && !showLyrics && !showTimer && !showEdit &&
         !showSaveQueue && !showQueueProfiles && !showSavePlaylist, onBack = onBack)
@@ -247,6 +248,7 @@ fun NowPlayingScreen(
         animationSpec = tween(if (reduceMotion) 0 else 260, easing = FastOutSlowInEasing), label = "Fondo de álbum"
     )
 
+    if (!showLyrics) {
     Box(Modifier.fillMaxSize().background(pageBackground)) {
         if (customBackground.isNotBlank()) {
             AsyncImage(model = customBackground, contentDescription = null,
@@ -487,6 +489,25 @@ fun NowPlayingScreen(
             }
         }
     }
+    } else {
+        ImmersiveLyricsScreen(
+            song = song,
+            artwork = coverUri,
+            ambientArtwork = backdrop?.file,
+            lyrics = lyrics,
+            positionMs = state.progress.positionMs,
+            durationMs = state.progress.durationMs.takeIf { it > 0L } ?: song?.durationMs ?: 0L,
+            isPlaying = state.playback.isPlaying,
+            reduceMotion = reduceMotion,
+            onBack = { showLyrics = false },
+            onPlayPause = onPlayPause,
+            onSeek = onSeek,
+            onImport = onImportLyrics,
+            onSearchLrclib = onFetchLrclib,
+            onAdjustOffset = onAdjustLyricsOffset,
+            onClear = onClearLyrics
+        )
+    }
 
     if (showArtists) {
         ModalBottomSheet(
@@ -576,94 +597,6 @@ fun NowPlayingScreen(
             Spacer(Modifier.height(30.dp))
         }
     }
-    if (showLyrics) {
-        ModalBottomSheet(
-            onDismissRequest = { showLyrics = false },
-            containerColor = if (lightMode) Color(0xFFF8F9FC) else Color(0xFF1B1020),
-            contentColor = pageText
-        ) {
-            val hasTimedLyrics = lyrics.any { it.timeMs >= 0L }
-            val activeIndex = remember(lyrics, state.progress.positionMs) {
-                lyrics.indexOfLast { it.timeMs >= 0L && it.timeMs <= state.progress.positionMs }
-            }
-            Column(Modifier.fillMaxWidth().background(Brush.verticalGradient(
-                listOf(Color(0xFF551E32), Color(0xFF24142A), Color(0xFF071623))))) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Letras", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = pageText)
-                        Text(
-                            if (lyrics.isEmpty()) "Importa un archivo .lrc o texto sincronizado"
-                            else if (hasTimedLyrics) "Sincronizadas con la reproducción"
-                            else "Letras sin marcas de tiempo",
-                            color = muted, fontSize = 12.sp
-                        )
-                    }
-                    TextButton(onClick = onImportLyrics) { Text(if (lyrics.isEmpty()) "Importar" else "Reemplazar", color = amber) }
-                }
-                if (lyrics.isNotEmpty()) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        AssistChip(onClick = { onAdjustLyricsOffset(-250L) }, label = { Text("-250 ms") })
-                        AssistChip(onClick = { onAdjustLyricsOffset(250L) }, label = { Text("+250 ms") })
-                        AssistChip(onClick = onClearLyrics, label = { Text("Borrar") })
-                    }
-                    Spacer(Modifier.height(8.dp))
-                }
-                if (lyrics.isEmpty()) {
-                    Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("Todavía no hay letras para esta canción.", color = pageText, fontWeight = FontWeight.SemiBold)
-                        Text("Puedes importar un archivo .lrc para mostrar la letra y ajustar el desfase dentro de AmberMusic.", color = muted)
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Button(onClick = onImportLyrics) { Text("Importar .lrc") }
-                            TextButton(onClick = onFetchLrclib) { Text("Buscar en LRCLIB", color = amber) }
-                        }
-                    }
-                } else {
-                    val scrollState = androidx.compose.foundation.lazy.rememberLazyListState()
-                    val density = LocalDensity.current
-                    val activeLineOffset = with(density) { 148.dp.roundToPx() }
-                    LaunchedEffect(activeIndex) {
-                        if (activeIndex >= 0) {
-                            // Only scroll when a new timed line begins, not at each media position tick.
-                            if (!reduceMotion) scrollState.animateScrollToItem(activeIndex, scrollOffset = -activeLineOffset)
-                            else scrollState.scrollToItem(activeIndex, scrollOffset = -activeLineOffset)
-                        }
-                    }
-                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp),
-                        state = scrollState,
-                        contentPadding = PaddingValues(horizontal = 22.dp, vertical = 150.dp)) {
-                        items(lyrics.size) { index ->
-                            val line = lyrics[index]
-                            val active = index == activeIndex && hasTimedLyrics
-                            val lineColor by animateColorAsState(
-                                targetValue = if (active) amber else pageText.copy(alpha = if (hasTimedLyrics) 0.61f else 0.95f),
-                                animationSpec = tween(if (reduceMotion) 0 else 220), label = "Foco de letra"
-                            )
-                            val lineSize by animateFloatAsState(
-                                targetValue = if (active) 21f else 16f,
-                                animationSpec = tween(if (reduceMotion) 0 else 220), label = "Escala de letra"
-                            )
-                            Text(
-                                text = line.text,
-                                color = lineColor,
-                                fontSize = lineSize.sp,
-                                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
-                                modifier = Modifier.fillMaxWidth()
-                                    .clickable(enabled = line.timeMs >= 0L) { onSeek(line.timeMs) }
-                                    .padding(vertical = 9.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     if (showEqualizer) {
         NativeEqualizerSheet(routeName = state.route.name, bluetooth = state.route.bluetooth,
             onDismiss = { showEqualizer = false }, onSystemEqualizer = onOpenEqualizer)
