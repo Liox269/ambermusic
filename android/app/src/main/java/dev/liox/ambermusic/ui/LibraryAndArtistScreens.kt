@@ -57,7 +57,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -163,7 +162,7 @@ fun LibraryAndArtistScreens(
     var locateRequest by rememberSaveable { mutableIntStateOf(0) }
     var actionSong by remember { mutableStateOf<SongEntity?>(null) }
     val libraryPreferences = androidx.compose.ui.platform.LocalContext.current.getSharedPreferences("amber_library_navigation", android.content.Context.MODE_PRIVATE)
-    var selectedTab by rememberSaveable { mutableIntStateOf(libraryPreferences.getInt("selected_tab", 0).coerceIn(0, 4)) }
+    var selectedTab by rememberSaveable { mutableIntStateOf(libraryPreferences.getInt("selected_tab", 0).coerceIn(0, 4).let { if (it == 1) 0 else it }) }
     LaunchedEffect(selectedTab) { libraryPreferences.edit().putInt("selected_tab", selectedTab).apply() }
     var artistId by rememberSaveable { mutableStateOf<Long?>(null) }
     var categoryId by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -195,7 +194,7 @@ fun LibraryAndArtistScreens(
         if (favoritesOpenRequest > 0) {
             artistId = null; categoryId = null; albumKey = null
             favoritesDetail = true
-            selectedTab = 1
+            selectedTab = 0
         }
     }
     val openSongs = {
@@ -304,7 +303,7 @@ fun LibraryAndArtistScreens(
                 Text(heading, color = LocalAmberPalette.current.foreground,
                     fontWeight = FontWeight.Bold, fontSize = if (inDetail) 22.sp else 25.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (!inDetail) Text("${state.songs.size} canciones · ${selectedProfile.name}",
+                if (!inDetail) Text(selectedProfile.name,
                     color = secondary, fontSize = 11.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -386,32 +385,26 @@ fun LibraryAndArtistScreens(
                     })
             }
             else -> {
-                if (query.isBlank()) {
-                    LibrarySpotlightSection(
-                        current = playing.song,
-                        recent = state.recentlyPlayed.take(8),
-                        favoritesCount = state.favoriteSongs.size,
-                        playlistsCount = state.playlists.size,
-                        onPlayRecent = { id ->
-                            viewModel.playSelection(state.recentlyPlayed, id)
-                            onOpenPlayer()
-                        },
-                        onOpenPlayer = onOpenPlayer
-                    )
-                }
+                // Four distinct destinations: the old 'Todo' tab duplicated 'Canciones'.
+                val libraryTabs = listOf(
+                    0 to "Canciones", 2 to "Álbumes", 3 to "Artistas", 4 to "Categorías"
+                )
                 ScrollableTabRow(
-                    selectedTabIndex = selectedTab, edgePadding = 16.dp,
+                    selectedTabIndex = libraryTabs.indexOfFirst { it.first == selectedTab }
+                        .coerceAtLeast(0),
+                    edgePadding = 16.dp,
                     containerColor = Color.Transparent, contentColor = gold,
                     divider = {}, indicator = {}
                 ) {
-                    listOf("Todo", "Canciones", "Álbumes", "Artistas", "Categorías").forEachIndexed { index, title ->
-                        Tab(selected = selectedTab == index, onClick = { selectedTab = index },
+                    libraryTabs.forEach { (tabKey, title) ->
+                        val isSelected = selectedTab == tabKey
+                        Tab(selected = isSelected, onClick = { selectedTab = tabKey },
                             selectedContentColor = LocalAmberPalette.current.foreground, unselectedContentColor = secondary,
                             text = {
                                 Box(Modifier.clip(RoundedCornerShape(24.dp))
-                                    .background(if (selectedTab == index) LocalAmberAccent.current else LocalAmberPalette.current.surface)
+                                    .background(if (isSelected) LocalAmberAccent.current else LocalAmberPalette.current.surface)
                                     .padding(horizontal = 12.dp, vertical = 7.dp)) {
-                                    Text(title, maxLines = 1, color = if (selectedTab == index)
+                                    Text(title, maxLines = 1, color = if (isSelected)
                                         if (visualStyle == "light") Color.White else Color.Black
                                         else LocalAmberPalette.current.foreground)
                                 }
@@ -439,11 +432,10 @@ fun LibraryAndArtistScreens(
                             Modifier.fillMaxWidth().padding(start = 20.dp, end = 13.dp, top = 10.dp, bottom = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column(Modifier.weight(1f)) {
-                            Text("Canciones", color = LocalAmberPalette.current.foreground, fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold)
-                            Text("${searchable.size} canciones", color = secondary, fontSize = 11.sp)
-                        }
+                            // Count is shown once; the selected tab already names this section.
+                            Text("${searchable.size} canciones",
+                                color = secondary, fontSize = 12.sp,
+                                modifier = Modifier.weight(1f))
                             Box {
                                 IconButton(onClick = { showSort = true }) {
                                     Icon(Icons.Filled.Sort, contentDescription = "Ordenar", tint = LocalAmberPalette.current.foreground)
@@ -638,47 +630,6 @@ fun LibraryAndArtistScreens(
     if (newCategoryDialog) {
         CategoryCreateDialog(onDismiss = { newCategoryDialog = false },
             onConfirm = { viewModel.createCategory(it); newCategoryDialog = false })
-    }
-}
-
-@Composable
-private fun LibrarySpotlightSection(
-    current: SongEntity?,
-    recent: List<SongEntity>,
-    favoritesCount: Int,
-    playlistsCount: Int,
-    onPlayRecent: (Long) -> Unit,
-    onOpenPlayer: () -> Unit
-) {
-    if (recent.isEmpty()) return
-    Column(Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 19.dp, end = 19.dp, top = 8.dp, bottom = 9.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("Seguir escuchando", color = LocalAmberPalette.current.foreground,
-                fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            Text("Ver todo", color = LocalAmberAccent.current, fontSize = 12.sp,
-                modifier = Modifier.clickable(onClick = onOpenPlayer))
-        }
-        LazyRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(horizontal = 17.dp)
-        ) {
-            items(recent.take(8), key = { it.id }) { song ->
-                Column(Modifier.width(112.dp).clickable { onPlayRecent(song.id) }) {
-                    SongArtwork(song = song, size = 112.dp,
-                        modifier = Modifier.clip(RoundedCornerShape(17.dp)))
-                    Spacer(Modifier.height(6.dp))
-                    Text(song.title, color = LocalAmberPalette.current.foreground,
-                        fontWeight = FontWeight.SemiBold, fontSize = 12.sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(song.artistDisplay, color = LocalAmberPalette.current.muted,
-                        fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-        }
     }
 }
 

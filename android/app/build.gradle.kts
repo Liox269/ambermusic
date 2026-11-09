@@ -12,8 +12,8 @@ android {
         applicationId = "dev.liox.ambermusic"
         minSdk = 31
         targetSdk = 35
-        versionCode = 260
-        versionName = "2.6.0-beta4"
+        versionCode = 261
+        versionName = "2.6.1-beta5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
