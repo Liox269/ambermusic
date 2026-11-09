@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SongOverrideEntity::class,
         PlayEventEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = true
 )
 abstract class MusicDatabase : RoomDatabase() {
@@ -59,9 +59,17 @@ abstract class MusicDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE songs ADD COLUMN dateAddedSeconds INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE songs ADD COLUMN codecMime TEXT")
+                db.execSQL("ALTER TABLE songs ADD COLUMN channelCount INTEGER")
+            }
+        }
+
         fun create(context: Context): MusicDatabase =
             Room.databaseBuilder(context.applicationContext, MusicDatabase::class.java, "amber_music.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
                 .build()
     }

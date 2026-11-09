@@ -3,6 +3,8 @@ package dev.liox.ambermusic.data.scanner
 import android.content.ContentResolver
 import android.content.Context
 import android.media.MediaMetadataRetriever
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.net.Uri
 import java.io.BufferedInputStream
 import java.io.InputStream
@@ -21,6 +23,8 @@ class AudioMetadataExtractor(private val context: Context) {
         val bitrateSource: String,
         val sampleRateHz: Int?,
         val bitDepth: Int?,
+        val codecMime: String?,
+        val channelCount: Int?,
         val genre: String?,
         val trackNumber: Int?,
         val discNumber: Int?
@@ -69,13 +73,14 @@ class AudioMetadataExtractor(private val context: Context) {
             retriever.release()
         }
 
+        val stream = inspectAudioTrack(uri)
         val header = when (format) {
             "FLAC" -> readFlacStreamInfo(context.contentResolver, uri)
             "WAV" -> readWavFmt(context.contentResolver, uri)
             else -> null
         }
         val durationMs = duration ?: catalogDurationMs.takeIf { it > 0L }
-        val knownBitrate = bitrate
+        val knownBitrate = stream.bitRate ?: bitrate
         val approximateBitrate = if (knownBitrate == null && bytes > 0L && durationMs != null) {
             ((bytes.toDouble() * 8_000.0) / durationMs.toDouble())
                 .toLong().takeIf { it > 0L }
@@ -93,14 +98,47 @@ class AudioMetadataExtractor(private val context: Context) {
                 approximateBitrate != null -> "ESTIMATED"
                 else -> "UNKNOWN"
             },
-            sampleRateHz = header?.sampleRateHz ?: sampleRate,
+            sampleRateHz = header?.sampleRateHz ?: stream.sampleRate ?: sampleRate,
             bitDepth = if (format == "FLAC" || format == "WAV") {
                 header?.bitDepth ?: depth
             } else null,
+            codecMime = stream.mime,
+            channelCount = stream.channelCount,
             genre = genre?.take(80),
             trackNumber = trackNumber,
             discNumber = discNumber
         )
+    }
+
+    private data class StreamAudio(
+        val mime: String? = null,
+        val sampleRate: Int? = null,
+        val bitRate: Long? = null,
+        val channelCount: Int? = null
+    )
+
+    // Container extension is not proof of codec (for example OGG can be Vorbis or Opus).
+    private fun inspectAudioTrack(uri: Uri): StreamAudio {
+        val extractor = MediaExtractor()
+        return try {
+            extractor.setDataSource(context, uri, null)
+            val track = (0 until extractor.trackCount).asSequence()
+                .map { extractor.getTrackFormat(it) }
+                .firstOrNull { it.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true }
+                ?: return StreamAudio()
+            fun integer(key: String): Int? = if (track.containsKey(key))
+                runCatching { track.getInteger(key) }.getOrNull()?.takeIf { it > 0 } else null
+            StreamAudio(
+                mime = track.getString(MediaFormat.KEY_MIME),
+                sampleRate = integer(MediaFormat.KEY_SAMPLE_RATE),
+                bitRate = integer(MediaFormat.KEY_BIT_RATE)?.toLong(),
+                channelCount = integer(MediaFormat.KEY_CHANNEL_COUNT)
+            )
+        } catch (_: Exception) {
+            StreamAudio()
+        } finally {
+            extractor.release()
+        }
     }
 
     private data class Header(val sampleRateHz: Int, val bitDepth: Int)
@@ -176,6 +214,8 @@ class AudioMetadataExtractor(private val context: Context) {
                         if (size < 16L) return@use null
                         val data = readBytes(input, 16)
                         if (data.size != 16) return@use null
+                        val encoding = (data[0].toInt() and 255) or ((data[1].toInt() and 255) shl 8)
+                        if (encoding != 1 && encoding != 0xFFFE) return@use null
                         val sampleRate = (data[4].toInt() and 255) or
                             ((data[5].toInt() and 255) shl 8) or
                             ((data[6].toInt() and 255) shl 16) or

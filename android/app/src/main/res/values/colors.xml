@@ -1,2 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources><color name="aigis_icon_background">#610407</color></resources>
+<resources>
+    <color name="wee_icon_background">#E60000</color>
+    <color name="amber_icon_background">#E60000</color>
+</resources>

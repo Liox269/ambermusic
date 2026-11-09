@@ -16,6 +16,7 @@ import dev.liox.ambermusic.playback.AudioRouteTracker
 import dev.liox.ambermusic.playback.MusicServiceConnection
 import dev.liox.ambermusic.viewmodel.MusicViewModel
 import dev.liox.ambermusic.settings.AmberSettings
+import dev.liox.ambermusic.profiles.ProfileStore
 import dev.liox.ambermusic.lyrics.LyricsRepository
 import dev.liox.ambermusic.backup.LibraryBackup
 import org.koin.android.ext.koin.androidContext
@@ -24,6 +25,7 @@ import org.koin.dsl.module
 
 val appModule = module {
     single { AmberSettings(androidContext()) }
+    single { ProfileStore(androidContext(), get()) }
     single { SmartPlaylistStore(androidContext()) }
     single { DuplicateFinder(androidContext()) }
     single { ReplayGainReader(androidContext()) }
@@ -37,8 +39,8 @@ val appModule = module {
     single { LocalMusicScanner(androidContext(), get(), get(), get()) }
     single { ArtworkRepository(androidContext()) }
     single { AudioRouteTracker(androidContext()) }
-    single { MusicServiceConnection(androidContext(), get(), get()) }
+    single { MusicServiceConnection(androidContext(), get(), get(), get()) }
     single<MusicLibraryRepository> { RoomMusicLibraryRepository(get(), get()) }
     factory { ScanLocalMusicUseCase(get()) }
-    viewModel { MusicViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    viewModel { MusicViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
 }

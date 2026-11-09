@@ -29,7 +29,9 @@ class RoomMusicLibraryRepository(
                     bitrateBps = song.bitrateBps,
                     bitrateSource = song.bitrateSource,
                     sampleRateHz = song.sampleRateHz,
-                    bitDepth = song.bitDepth
+                    bitDepth = song.bitDepth,
+                    codecMime = song.codecMime,
+                    channelCount = song.channelCount
                 )
             }
         }.flowOn(Dispatchers.IO)

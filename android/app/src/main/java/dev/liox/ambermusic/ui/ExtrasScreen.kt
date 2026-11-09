@@ -1,6 +1,8 @@
 package dev.liox.ambermusic.ui
 
 import android.net.Uri
+import android.content.Intent
+import androidx.compose.runtime.LaunchedEffect
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -79,22 +81,50 @@ fun ExtrasScreen(
     viewModel: MusicViewModel,
     onBack: () -> Unit,
     onPlayer: () -> Unit,
-    startOnSettings: Boolean = false
+    startOnSettings: Boolean = false,
+    startOnProfiles: Boolean = false,
+    onOpenFavorites: () -> Unit = {}
 ) {
     val accent = LocalAmberAccent.current
-    var tab by rememberSaveable(startOnSettings) { mutableIntStateOf(if (startOnSettings) 4 else 0) }
-    BackHandler(enabled = tab in 5..9) { tab = 4 }
+    var tab by rememberSaveable(startOnSettings, startOnProfiles) {
+        mutableIntStateOf(if (startOnProfiles) 14 else if (startOnSettings) 4 else 0)
+    }
+    BackHandler(enabled = tab in 5..15) { tab = 4 }
     var playlistId by rememberSaveable { mutableStateOf<Long?>(null) }
     var createDialog by remember { mutableStateOf(false) }
     var showFolders by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<Long?>(null) }
     var info by remember { mutableStateOf<String?>(null) }
     val theme by viewModel.theme.collectAsState()
+    val visualStyle by viewModel.visualStyle.collectAsState()
+    val density by viewModel.density.collectAsState()
+    val reduced by viewModel.reduceMotion.collectAsState()
+    val fitCover by viewModel.fitCover.collectAsState()
+    val route by viewModel.currentRoute.collectAsState()
+    val autoProfiles by viewModel.autoOutputProfiles.collectAsState()
+    val routePresets by viewModel.routePresets.collectAsState()
     val offload by viewModel.offload.collectAsState()
     val gain by viewModel.replayGain.collectAsState()
     val soft by viewModel.smoothTransition.collectAsState()
     val immersive by viewModel.immersive.collectAsState()
     val context = LocalContext.current
+    val donationPrefs = remember(context) { context.getSharedPreferences("wee_support", android.content.Context.MODE_PRIVATE) }
+    var showSupportPrompt by remember { mutableStateOf(false) }
+    LaunchedEffect(startOnSettings) {
+        if (false) {
+            showSupportPrompt = true
+        }
+    }
+    fun openDonationLink() {
+        val url = context.getString(dev.liox.ambermusic.R.string.donation_url)
+        // No donation destination is opened until the developer configures a personal link.
+        if (url == "https://www.paypal.com/donate/") {
+            info = "Falta configurar el enlace personal de PayPal antes de publicar."
+        } else {
+            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+                .onFailure { info = "No se pudo abrir el enlace de PayPal" }
+        }
+    }
     val scope = rememberCoroutineScope()
     val exportPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) scope.launch {
@@ -121,10 +151,37 @@ fun ExtrasScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Color.Black)) {
+    val importM3uPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                        ?: error("No se pudo leer la lista")
+                }
+            }.onSuccess { content -> viewModel.importM3uText(content) { info = it } }
+                .onFailure { info = it.localizedMessage ?: "Error leyendo M3U8" }
+        }
+    }
+    var exportM3uId by remember { mutableStateOf<Long?>(null) }
+    val exportM3uPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("audio/x-mpegurl")) { uri ->
+        val id = exportM3uId
+        if (uri != null && id != null) scope.launch {
+            runCatching {
+                val contents = viewModel.exportPlaylistM3u(id)
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri, "wt")?.bufferedWriter(Charsets.UTF_8)?.use {
+                        it.write(contents)
+                    } ?: error("No se pudo guardar la lista")
+                }
+            }.onSuccess { info = "Playlist exportada" }
+                .onFailure { info = it.localizedMessage ?: "Error exportando M3U8" }
+        }
+    }
+
+    Column(Modifier.fillMaxSize().background(LocalAmberPalette.current.background)) {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { if (tab in 5..9) tab = 4 else onBack() }) { Icon(Icons.Filled.ArrowBack, "Volver", tint = Color.White) }
-            Text(when (tab) { 4 -> "Ajustes"; 5 -> "Duplicados"; 6 -> "Biblioteca y carpetas"; 7 -> "Apariencia"; 8 -> "Inmersión visual"; 9 -> "Audio"; else -> "Mi AmberMusic" }, color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            IconButton(onClick = { if (tab in 5..15) tab = 4 else onBack() }) { Icon(Icons.Filled.ArrowBack, "Volver", tint = LocalAmberPalette.current.foreground) }
+            Text(when (tab) { 4 -> "Ajustes"; 5 -> "Duplicados"; 6 -> "Biblioteca y carpetas"; 7 -> "Apariencia"; 8 -> "Inmersión visual"; 9 -> "Audio"; 10 -> "Apoyo opcional"; 11 -> "Reproducción"; 12 -> "Rendimiento"; 13 -> "Datos y respaldo"; 14 -> "Perfiles locales"; 15 -> "Mis temas"; else -> "AmberMusic" }, color = LocalAmberPalette.current.foreground, fontSize = 23.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
 
         }
         if (tab in 0..3) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
@@ -138,21 +195,28 @@ fun ExtrasScreen(
                 val currentId = playlistId
                 if (currentId == null) {
                     Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Mis playlists", color = Color.White, modifier = Modifier.weight(1f))
+                        Text("Mis playlists", color = LocalAmberPalette.current.foreground, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { importM3uPicker.launch(arrayOf("audio/x-mpegurl", "audio/mpegurl", "text/plain", "*/*")) }) {
+                            Text("Importar M3U8", color = accent)
+                        }
                         TextButton(onClick = { createDialog = true }) { Text("+ Nueva", color = accent) }
                     }
                     LazyColumn {
                         if (library.playlists.isEmpty()) item {
                             Text("Aún no tienes playlists. Pulsa + Nueva para crear la primera.",
-                                color = Color.LightGray, modifier = Modifier.padding(20.dp))
+                                color = LocalAmberPalette.current.muted, modifier = Modifier.padding(20.dp))
                         }
                         items(library.playlists, key = { it.id }) { playlist ->
                             Row(Modifier.fillMaxWidth().clickable { playlistId = playlist.id }
                                 .padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Filled.MusicNote, null, tint = accent)
-                                Text(playlist.name, color = Color.White, modifier = Modifier.weight(1f).padding(start = 14.dp))
+                                Text(playlist.name, color = LocalAmberPalette.current.foreground, modifier = Modifier.weight(1f).padding(start = 14.dp))
+                                TextButton(onClick = {
+                                    exportM3uId = playlist.id
+                                    exportM3uPicker.launch("${playlist.name}.m3u8")
+                                }) { Text("M3U8", color = accent, fontSize = 11.sp) }
                                 IconButton(onClick = { pendingDelete = playlist.id }) {
-                                    Icon(Icons.Filled.Delete, "Eliminar playlist", tint = Color.LightGray)
+                                    Icon(Icons.Filled.Delete, "Eliminar playlist", tint = LocalAmberPalette.current.muted)
                                 }
                             }
                         }
@@ -171,7 +235,7 @@ fun ExtrasScreen(
                     SectionName("Resumen de escucha")
                     Text("Últimos 7 días: ${library.weekPlays} reproducciones · " +
                         "Últimos 30 días: ${library.monthPlays}",
-                        color = Color.White, modifier = Modifier.padding(horizontal = 16.dp))
+                        color = LocalAmberPalette.current.foreground, modifier = Modifier.padding(horizontal = 16.dp))
                     SectionName("Tus favoritas · ${library.favoriteSongs.size}")
                 }
                 items(library.favoriteSongs.take(12), key = { "favorite_${it.id}" }) { song ->
@@ -198,83 +262,42 @@ fun ExtrasScreen(
             2 -> SmartPlaylistsPanel(library, viewModel, onPlayer)
             3 -> DuplicatesPanel(library, viewModel)
             5 -> DuplicatesPanel(library, viewModel)
-            4 -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                item { Text("Personaliza tu música sin menús interminables", color = Color.LightGray, fontSize = 13.sp, modifier = Modifier.padding(vertical = 18.dp)) }
-                item { SettingsEntry("Biblioteca y carpetas", "Carpetas permitidas y actualizar música", Icons.Filled.FolderOpen, accent) { tab = 6 } }
-                item { SettingsEntry("Duplicados", "Analizar, ocultar y mostrar copias", Icons.Filled.ContentCopy, accent) { tab = 5 } }
-                item { SettingsEntry("Apariencia", "Elige entre los temas AMOLED", Icons.Filled.Palette, accent) { tab = 7 } }
-                item { SettingsEntry("Inmersión visual", "Fondo ambiental y blur", Icons.Filled.BlurOn, accent) { tab = 8 } }
-                item { SettingsEntry("Audio", "Offload, ReplayGain y transiciones", Icons.Filled.Headphones, accent) { tab = 9 } }
-                item { Spacer(Modifier.height(85.dp)) }
+            4 -> SettingsHomeV21(viewModel = viewModel, onNavigate = { tab = it })
+            14 -> ProfilesScreen(library = library, onOpenThemeEditor = { tab = 15 }, onOpenFavorites = onOpenFavorites)
+            15 -> ThemeStudioScreen()
+            10 -> LazyColumn(Modifier.fillMaxSize().padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                item { SectionName("Apoya el desarrollo de AmberMusic") }
+                item { Text("AmberMusic es gratuito, sin anuncios y funciona sin conexión. Si te resulta útil, puedes apoyar su desarrollo con una donación voluntaria. No se desbloquea ninguna función.", color = LocalAmberPalette.current.muted, fontSize = 15.sp) }
+                item { Button(onClick = { openDonationLink() }) { Text("Abrir PayPal") } }
+                item { Text("Nunca te pediremos una donación para escuchar tu música.", color = LocalAmberPalette.current.muted, fontSize = 12.sp) }
             }
             6 -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
                 item {
                     SectionName("Carpetas de música")
-                    Text("Selecciona las carpetas reconocidas por Android. También se incluyen sus subcarpetas y solo canciones de más de un minuto.", color = Color.LightGray, fontSize = 13.sp)
+                    Text("Selecciona las carpetas reconocidas por Android. También se incluyen sus subcarpetas y solo canciones de más de un minuto.", color = LocalAmberPalette.current.muted, fontSize = 13.sp)
                     TextButton(onClick = { viewModel.loadAvailableFolders(); showFolders = true }) { Text("Elegir carpetas", color = accent) }
                     TextButton(onClick = { viewModel.scanLocalMusic() }) { Text("Actualizar biblioteca", color = accent) }
                 }
             }
-            7 -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-                item {
-                    SectionName("Temas AMOLED")
-                    Text("El tema cambia los controles sin alterar los colores de la portada.", color = Color.LightGray, fontSize = 13.sp)
-                    Column(verticalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.padding(top = 16.dp)) {
-                        AmberPalettes.all.chunked(2).forEach { row ->
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                                row.forEach { palette ->
-                                    Row(Modifier.weight(1f).clip(RoundedCornerShape(15.dp))
-                                        .background(if (theme == palette.id) palette.surfaceRaised else palette.surface)
-                                        .clickable { viewModel.setTheme(palette.id) }.padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically) {
-                                        Box(Modifier.size(23.dp).clip(RoundedCornerShape(10.dp)).background(palette.accent))
-                                        Text(palette.title, color = Color.White, fontSize = 11.sp, maxLines = 1,
-                                            modifier = Modifier.padding(start = 8.dp))
-                                    }
-                                }
-                                if (row.size == 1) Spacer(Modifier.weight(1f))
-                            }
-                        }
-                    }
-                }
-            }
+            7 -> AppearanceSettingsV21(viewModel)
             8 -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
                 item {
                     SectionName("Fondo ambiental")
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Blur dinámico de la portada", color = Color.White, modifier = Modifier.weight(1f))
+                        Text("Blur dinámico de la portada", color = LocalAmberPalette.current.foreground, modifier = Modifier.weight(1f))
                         Switch(checked = immersive, onCheckedChange = viewModel::setImmersive)
                     }
-                    Text("Se genera por portada y se reutiliza desde caché. No se recalcula en cada fotograma.", color = Color.Gray, fontSize = 13.sp)
+                    Text("Se genera por portada y se reutiliza desde caché. No se recalcula en cada fotograma.", color = LocalAmberPalette.current.muted, fontSize = 13.sp)
                 }
             }
-            9 -> LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-                item {
-                    SectionName("Reproducción")
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Audio Offload", color = Color.White)
-                            Text("Menor consumo si el dispositivo y el audio son compatibles", color = Color.Gray, fontSize = 12.sp)
-                        }
-                        Switch(checked = offload, onCheckedChange = viewModel::setOffload)
-                    }
-                    SectionName("ReplayGain")
-                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        listOf("off" to "Desactivado", "track" to "Por pista", "album" to "Por álbum").forEach { (value, title) ->
-                            FilterChip(selected = gain == value, onClick = { viewModel.setReplayGain(value) }, label = { Text(title) })
-                        }
-                    }
-                    Text("Disponible solo cuando el archivo contiene etiquetas ReplayGain compatibles.", color = Color.Gray, fontSize = 12.sp)
-                    Spacer(Modifier.height(16.dp))
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Inicio suave de pista", color = Color.White)
-                            Text("Fundido de entrada de 350 ms", color = Color.Gray, fontSize = 12.sp)
-                        }
-                        Switch(checked = soft, onCheckedChange = viewModel::setSmoothTransitions)
-                    }
-                }
-            }
+            9 -> AudioSettingsV21(viewModel)
+            11 -> PlaybackSettingsV21(viewModel)
+            12 -> PerformanceSettingsV21(viewModel)
+            13 -> DataSettingsV21(
+                onExport = { exportPicker.launch("ambermusic_backup.json") },
+                onImport = { importPicker.launch(arrayOf("application/json", "text/plain", "*/*")) },
+                onSupport = { tab = 10 }
+            )
         }
     }
     pendingDelete?.let { chosenId ->
@@ -294,6 +317,15 @@ fun ExtrasScreen(
             text = { OutlinedTextField(value = name, onValueChange = { name = it.take(80) }, label = { Text("Nombre") }) },
             confirmButton = { TextButton(onClick = { viewModel.createPlaylist(name); createDialog = false }, enabled = name.isNotBlank()) { Text("Crear") } },
             dismissButton = { TextButton(onClick = { createDialog = false }) { Text("Cancelar") } })
+    }
+    if (showSupportPrompt) {
+        AlertDialog(
+            onDismissRequest = { showSupportPrompt = false; donationPrefs.edit().putBoolean("support_prompt_seen", true).apply() },
+            title = { Text("¿Te gusta AmberMusic?") },
+            text = { Text("AmberMusic seguirá siendo gratis y sin anuncios. Si quieres apoyar su desarrollo, puedes donar voluntariamente por PayPal.") },
+            confirmButton = { TextButton(onClick = { showSupportPrompt = false; donationPrefs.edit().putBoolean("support_prompt_seen", true).apply(); tab = 10 }) { Text("Ver cómo apoyar") } },
+            dismissButton = { TextButton(onClick = { showSupportPrompt = false; donationPrefs.edit().putBoolean("support_prompt_seen", true).apply() }) { Text("Ahora no") } }
+        )
     }
     info?.let { message ->
         AlertDialog(onDismissRequest = { info = null }, title = { Text("AmberMusic") }, text = { Text(message) },
@@ -321,17 +353,17 @@ private fun SmartPlaylistsPanel(library: LibraryUiState, viewModel: MusicViewMod
     val selected = rules.firstOrNull { it.id == selectedId }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Playlists automáticas", color = Color.White, fontWeight = FontWeight.SemiBold,
+            Text("Playlists automáticas", color = LocalAmberPalette.current.foreground, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f))
             TextButton(onClick = { showingCreate = true }) { Text("+ Nueva") }
         }
         Text("Se actualizan solas al añadir música. No duplican archivos.",
-            color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp))
+            color = LocalAmberPalette.current.muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp))
         if (selected == null) {
             LazyColumn {
                 if (rules.isEmpty()) item {
                     Text("Sin listas inteligentes. Crea una regla para agrupar canciones automáticamente.",
-                        color = Color.LightGray, modifier = Modifier.padding(20.dp))
+                        color = LocalAmberPalette.current.muted, modifier = Modifier.padding(20.dp))
                 }
                 items(rules, key = { it.id }) { rule ->
                     val amount = viewModel.smartSongs(rule, library).size
@@ -340,11 +372,11 @@ private fun SmartPlaylistsPanel(library: LibraryUiState, viewModel: MusicViewMod
                         verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.MusicNote, null, tint = LocalAmberAccent.current)
                         Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                            Text(rule.name, color = Color.White)
-                            Text("${rule.type} · $amount canciones", color = Color.Gray, fontSize = 12.sp)
+                            Text(rule.name, color = LocalAmberPalette.current.foreground)
+                            Text("${rule.type} · $amount canciones", color = LocalAmberPalette.current.muted, fontSize = 12.sp)
                         }
                         IconButton(onClick = { viewModel.removeSmartPlaylist(rule.id) }) {
-                            Icon(Icons.Filled.Delete, "Eliminar regla", tint = Color.LightGray)
+                            Icon(Icons.Filled.Delete, "Eliminar regla", tint = LocalAmberPalette.current.muted)
                         }
                     }
                 }
@@ -368,7 +400,8 @@ private fun SmartPlaylistsPanel(library: LibraryUiState, viewModel: MusicViewMod
             SmartRules.ARTIST to "Artista", SmartRules.ALBUM to "Álbum",
             SmartRules.GENRE to "Género", SmartRules.FOLDER to "Carpeta",
             SmartRules.FORMAT to "Formato", SmartRules.FAVOURITES to "Favoritas",
-            SmartRules.POPULAR to "Muy escuchadas", SmartRules.RECENT to "Últimos 30 días"
+            SmartRules.POPULAR to "Muy escuchadas", SmartRules.RECENT to "Últimos 30 días",
+            SmartRules.COMBINED to "Favoritas sin escuchar 30 días"
         )
         AlertDialog(onDismissRequest = { showingCreate = false }, title = { Text("Nueva playlist automática") },
             text = {
@@ -389,9 +422,11 @@ private fun SmartPlaylistsPanel(library: LibraryUiState, viewModel: MusicViewMod
                 }
             },
             confirmButton = { TextButton(onClick = {
-                viewModel.createSmartPlaylist(name, type, value); showingCreate = false
+                viewModel.createSmartPlaylist(name, type,
+                    if (type == SmartRules.COMBINED) "favoritas&no_reciente" else value)
+                showingCreate = false
             }, enabled = name.isNotBlank() && (type in listOf(SmartRules.FAVOURITES,
-                SmartRules.RECENT) || value.isNotBlank())) { Text("Crear") } },
+                SmartRules.RECENT, SmartRules.COMBINED) || value.isNotBlank())) { Text("Crear") } },
             dismissButton = { TextButton(onClick = { showingCreate = false }) { Text("Cancelar") } })
     }
 }
@@ -404,7 +439,7 @@ private fun DuplicatesPanel(library: LibraryUiState, viewModel: MusicViewModel) 
     val hidden by viewModel.hiddenDuplicates.collectAsState()
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Duplicados exactos", color = Color.White,
+            Text("Duplicados exactos", color = LocalAmberPalette.current.foreground,
                 fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             Button(onClick = { viewModel.analyzeDuplicates(library.songs) }, enabled = !running) {
                 Text(if (running) "Analizando…" else "Analizar")
@@ -412,7 +447,7 @@ private fun DuplicatesPanel(library: LibraryUiState, viewModel: MusicViewModel) 
         }
         Text("Solo se consideran duplicados exactos los archivos con el mismo SHA-256. " +
             "Ningún archivo se borra ni se modifica.",
-            color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp))
+            color = LocalAmberPalette.current.muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp))
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -437,7 +472,7 @@ private fun DuplicatesPanel(library: LibraryUiState, viewModel: MusicViewModel) 
         LazyColumn {
             if (groups.isEmpty() && !running) item {
                 Text("Pulsa Analizar para buscar copias idénticas. El análisis no elimina archivos.",
-                    color = Color.LightGray, modifier = Modifier.padding(20.dp))
+                    color = LocalAmberPalette.current.muted, modifier = Modifier.padding(20.dp))
             }
             groups.forEachIndexed { index, group ->
                 item(key = "group_$index") {
@@ -448,9 +483,9 @@ private fun DuplicatesPanel(library: LibraryUiState, viewModel: MusicViewModel) 
                         verticalAlignment = Alignment.CenterVertically) {
                         SongArtwork(song, size = 40.dp)
                         Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                            Text(song.title, color = Color.White, maxLines = 1)
+                            Text(song.title, color = LocalAmberPalette.current.foreground, maxLines = 1)
                             Text(song.folderPath + song.displayName,
-                                color = Color.Gray, fontSize = 11.sp, maxLines = 2)
+                                color = LocalAmberPalette.current.muted, fontSize = 11.sp, maxLines = 2)
                             if (song.contentUri in hidden) {
                                 Text("Oculta", color = LocalAmberAccent.current, fontSize = 11.sp)
                             }
@@ -478,10 +513,10 @@ private fun CompactTrack(song: SongEntity, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically) {
         SongArtwork(song = song, size = 44.dp)
         Column(Modifier.weight(1f).padding(start = 14.dp)) {
-            Text(song.title, color = Color.White, maxLines = 1)
-            Text(song.artistDisplay, color = Color.Gray, fontSize = 12.sp, maxLines = 1)
+            Text(song.title, color = LocalAmberPalette.current.foreground, maxLines = 1)
+            Text(song.artistDisplay, color = LocalAmberPalette.current.muted, fontSize = 12.sp, maxLines = 1)
         }
-        Icon(Icons.Filled.PlayArrow, "Reproducir", tint = Color.White)
+        Icon(Icons.Filled.PlayArrow, "Reproducir", tint = LocalAmberPalette.current.foreground)
     }
 }
 
@@ -491,7 +526,7 @@ private fun SongListBlock(songs: List<SongEntity>, onClick: (Long) -> Unit, onRe
         items(songs, key = { it.id }) { song ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 androidx.compose.foundation.layout.Box(Modifier.weight(1f)) { CompactTrack(song) { onClick(song.id) } }
-                IconButton(onClick = { onRemove(song.id) }) { Icon(Icons.Filled.Delete, "Quitar", tint = Color.LightGray) }
+                IconButton(onClick = { onRemove(song.id) }) { Icon(Icons.Filled.Delete, "Quitar", tint = LocalAmberPalette.current.muted) }
             }
         }
         item { Spacer(Modifier.height(100.dp)) }
@@ -514,8 +549,8 @@ private fun SettingsEntry(
     ) {
         Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(23.dp))
         Column(Modifier.weight(1f).padding(start = 15.dp)) {
-            Text(title, color = Color.White, fontWeight = FontWeight.Medium)
-            Text(description, color = Color.LightGray, fontSize = 12.sp)
+            Text(title, color = LocalAmberPalette.current.foreground, fontWeight = FontWeight.Medium)
+            Text(description, color = LocalAmberPalette.current.muted, fontSize = 12.sp)
         }
         Text("›", color = accent, fontSize = 26.sp)
     }

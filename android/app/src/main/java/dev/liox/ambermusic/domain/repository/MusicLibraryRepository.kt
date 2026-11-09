@@ -13,7 +13,9 @@ data class MusicTrack(
     val bitrateBps: Long?,
     val bitrateSource: String,
     val sampleRateHz: Int?,
-    val bitDepth: Int?
+    val bitDepth: Int?,
+    val codecMime: String? = null,
+    val channelCount: Int? = null
 )
 
 data class ScanSummary(
