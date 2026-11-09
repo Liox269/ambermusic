@@ -35,6 +35,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -197,6 +200,32 @@ class MusicViewModel(
             try { playbackConnection.connect() }
             catch (failure: Exception) { scanMessage.value = "Servicio de audio: ${failure.localizedMessage}" }
         }
+        // Fetch only for the track that starts playing, never for all library rows.
+        // Existing local LRC files win; a miss is throttled. Audio never waits on network.
+        viewModelScope.launch {
+            playbackConnection.currentSong
+                .map { it?.song }
+                .distinctUntilChangedBy { it?.id }
+                .collectLatest { song ->
+                    if (song == null) return@collectLatest
+                    try {
+                        val added = lyrics.autoFetchFromLrclib(
+                            song.id, song.title, song.artistDisplay, song.albumTitle,
+                            song.durationMs, song.modifiedAtSeconds
+                        )
+                        if (added && playbackConnection.currentSong.value?.song?.id == song.id)
+                            lyricsRevision.value += 1
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        // Offline, timeouts and rate limits never interrupt music.
+                    }
+                }
+        }
+    }
+
+    fun setLyricsVisible(visible: Boolean) {
+        playbackConnection.setLyricsVisible(visible)
     }
 
     fun scanLocalMusic() {

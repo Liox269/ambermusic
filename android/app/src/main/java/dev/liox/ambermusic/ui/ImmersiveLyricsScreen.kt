@@ -7,6 +7,14 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -90,7 +98,7 @@ internal fun ImmersiveLyricsScreen(
     val foreground = LocalAmberPalette.current.foreground
     val muted = LocalAmberPalette.current.muted
     val hasTimestamps = remember(lyrics) { lyrics.any { it.timeMs >= 0L } }
-    val activeIndex = LyricSyncPolicy.activeIndex(lyrics, positionMs)
+    val activeIndex = LyricSyncPolicy.activeIndex(lyrics, positionMs, LyricSyncPolicy.VISUAL_LEAD_MS)
     val currentTitle = song?.title ?: "Sin reproducción"
     var showTools by remember { mutableStateOf(false) }
 
@@ -201,15 +209,17 @@ internal fun ImmersiveLyricsScreen(
                     val density = LocalDensity.current
                     val offsetPx = with(density) { (maxHeight * 0.21f).roundToPx() }
                     val scroll = rememberLazyListState()
+                    var previousActive by remember(song?.id) { mutableStateOf(-1) }
                     LaunchedEffect(song?.id, activeIndex, reduceMotion, lyrics) {
-                        // Keep the active line near the center and avoid a recomposition-driven jump.
                         if (hasTimestamps && activeIndex >= 0) {
-                            val target = activeIndex + 1 // First item is top centering spacer.
-                            if (reduceMotion) scroll.scrollToItem(target, scrollOffset = -offsetPx)
+                            val target = activeIndex + 1
+                            val jumped = previousActive < 0 ||
+                                kotlin.math.abs(activeIndex - previousActive) > 2
+                            previousActive = activeIndex
+                            // Seeking a distant moment must not slowly animate through dozens of lines.
+                            if (reduceMotion || jumped) scroll.scrollToItem(target, scrollOffset = -offsetPx)
                             else scroll.animateScrollToItem(target, scrollOffset = -offsetPx)
-                        } else if (!hasTimestamps) {
-                            scroll.scrollToItem(0)
-                        }
+                        } else if (!hasTimestamps) scroll.scrollToItem(0)
                     }
                     LazyColumn(
                         state = scroll,
@@ -251,27 +261,13 @@ internal fun ImmersiveLyricsScreen(
 
             // Lightweight persistent transport: no heavy card or large bottom empty area.
             Column(Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 14.dp)) {
-                val fraction = if (durationMs > 0L)
-                    (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
-                    else 0f
-                val animatedFraction by animateFloatAsState(
-                    targetValue = fraction,
-                    animationSpec = tween(if (reduceMotion) 0 else 220),
-                    label = "Progreso de letras"
+                LyricsSeekBar(
+                    positionMs = positionMs,
+                    durationMs = durationMs,
+                    reduceMotion = reduceMotion,
+                    accent = accent,
+                    onSeek = onSeek
                 )
-                Box(
-                    Modifier.fillMaxWidth().height(24.dp)
-                        .clickable(enabled = durationMs > 0L) {
-                            // Tap in the lyric text is the seek interaction; this bar is visual.
-                            // Player seek remains available via the main Now Playing view.
-                        },
-                    contentAlignment = Alignment.CenterStart
-                ) {
-                    Box(Modifier.fillMaxWidth().height(3.dp).clip(CircleShape)
-                        .background(Color.White.copy(alpha = .22f)))
-                    Box(Modifier.fillMaxWidth(animatedFraction).height(3.dp).clip(CircleShape)
-                        .background(accent))
-                }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(lyricTime(positionMs), color = muted, fontSize = 11.sp)
                     Spacer(Modifier.weight(1f))
@@ -288,6 +284,75 @@ internal fun ImmersiveLyricsScreen(
                 }
             }
         }
+    }
+}
+
+
+/** Tappable and draggable progress track with a 36 dp touch target. */
+@Composable
+private fun LyricsSeekBar(
+    positionMs: Long,
+    durationMs: Long,
+    reduceMotion: Boolean,
+    accent: Color,
+    onSeek: (Long) -> Unit
+) {
+    var widthPx by remember { mutableStateOf(0) }
+    var scrubbing by remember { mutableStateOf<Float?>(null) }
+    val actualProgress = if (durationMs > 0L)
+        (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+    val displayProgress by animateFloatAsState(
+        targetValue = scrubbing ?: actualProgress,
+        animationSpec = tween(if (reduceMotion || scrubbing != null) 0 else 130),
+        label = "Progreso interactivo de letras"
+    )
+    Canvas(
+        Modifier.fillMaxWidth().height(36.dp)
+            .onSizeChanged { widthPx = it.width }
+            .pointerInput(durationMs, onSeek) {
+                detectTapGestures { offset ->
+                    if (durationMs > 0L) onSeek(
+                        LyricSyncPolicy.seekPosition(offset.x, widthPx.toFloat(), durationMs)
+                    )
+                }
+            }
+            .pointerInput(durationMs, onSeek) {
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        if (durationMs > 0L && widthPx > 0)
+                            scrubbing = (offset.x / widthPx).coerceIn(0f, 1f)
+                    },
+                    onDrag = { change, drag ->
+                        change.consume()
+                        if (durationMs > 0L && widthPx > 0)
+                            scrubbing = ((scrubbing ?: actualProgress) + drag.x / widthPx)
+                                .coerceIn(0f, 1f)
+                    },
+                    onDragEnd = {
+                        scrubbing?.let { fraction -> onSeek((fraction * durationMs).toLong()) }
+                        scrubbing = null
+                    },
+                    onDragCancel = { scrubbing = null }
+                )
+            }
+    ) {
+        val barHeight = 3.dp.toPx()
+        val top = (size.height - barHeight) / 2f
+        drawRoundRect(
+            color = Color.White.copy(alpha = 0.25f),
+            topLeft = Offset(0f, top),
+            size = androidx.compose.ui.geometry.Size(size.width, barHeight),
+            cornerRadius = CornerRadius(barHeight / 2f)
+        )
+        val played = size.width * displayProgress
+        if (played > 0f) drawRoundRect(
+            color = accent,
+            topLeft = Offset(0f, top),
+            size = androidx.compose.ui.geometry.Size(played, barHeight),
+            cornerRadius = CornerRadius(barHeight / 2f)
+        )
+        drawCircle(Color.White, radius = if (scrubbing != null) 5.dp.toPx() else 3.dp.toPx(),
+            center = Offset(played.coerceIn(0f, size.width), size.height / 2f))
     }
 }
 

@@ -166,6 +166,7 @@ fun NowPlayingScreen(
     onFetchLrclib: () -> Unit,
     onAdjustLyricsOffset: (Long) -> Unit,
     onClearLyrics: () -> Unit,
+    onLyricsVisible: (Boolean) -> Unit,
     onPickCover: () -> Unit,
     onOpenEqualizer: () -> Unit,
     onRemoveCover: () -> Unit,
@@ -200,6 +201,10 @@ fun NowPlayingScreen(
     var showQueue by remember { mutableStateOf(false) }
     var showEqualizer by remember { mutableStateOf(false) }
     var showLyrics by remember { mutableStateOf(false) }
+    androidx.compose.runtime.DisposableEffect(showLyrics, onLyricsVisible) {
+        onLyricsVisible(showLyrics)
+        onDispose { if (showLyrics) onLyricsVisible(false) }
+    }
     var showSaveQueue by remember { mutableStateOf(false) }
     var showQueueProfiles by remember { mutableStateOf(false) }
     var showSavePlaylist by remember { mutableStateOf(false) }

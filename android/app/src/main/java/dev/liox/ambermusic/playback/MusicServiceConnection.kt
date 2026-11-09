@@ -58,6 +58,8 @@ class MusicServiceConnection(
     private val connectMutex = Mutex()
     private var controller: MediaController? = null
     private var ticker: Job? = null
+    @Volatile private var lyricsVisible = false
+    fun setLyricsVisible(visible: Boolean) { lyricsVisible = visible }
     private val _songId = MutableStateFlow<Long?>(null)
     private val _artwork = MutableStateFlow<String?>(null)
     private val _playbackState = MutableStateFlow(PlaybackState())
@@ -197,7 +199,8 @@ class MusicServiceConnection(
                         snapshotQueue(it)
                     }
                 }
-                delay(PlaybackRefreshPolicy.PROGRESS_POLL_MS)
+                delay(if (lyricsVisible) PlaybackRefreshPolicy.LYRICS_POLL_MS
+                    else PlaybackRefreshPolicy.PROGRESS_POLL_MS)
             }
         }
     }

@@ -294,6 +294,7 @@ private fun AmberMusicRoot(
             } },
             onAdjustLyricsOffset = viewModel::adjustLyricsOffset,
             onClearLyrics = viewModel::clearLyrics,
+            onLyricsVisible = viewModel::setLyricsVisible,
             namedQueueNames = namedQueueNames,
             onSaveNamedQueue = viewModel::saveNamedQueue,
             onRestoreNamedQueue = viewModel::restoreNamedQueue,
