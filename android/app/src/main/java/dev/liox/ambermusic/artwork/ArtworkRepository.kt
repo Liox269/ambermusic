@@ -11,20 +11,15 @@ import android.util.Size
 import androidx.core.content.FileProvider
 import dev.liox.ambermusic.data.local.SongEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import java.io.ByteArrayOutputStream
 
-/**
- * Offline artwork cache shared by Media3, the library and the player.
- * Track-specific embedded art is preferred; system album art is a fallback.
- * The file is private to the app and is never downloaded from the network.
- */
 class ArtworkRepository(private val context: Context) {
     private val directory by lazy { File(context.cacheDir, "covers").apply { mkdirs() } }
     private val fileMutex = Mutex()
@@ -33,37 +28,70 @@ class ArtworkRepository(private val context: Context) {
     private val _version = MutableStateFlow(0)
     val version: StateFlow<Int> = _version
 
+    fun hasCustom(songId: Long): Boolean {
+        val file = File(customDirectory, "$songId.jpg")
+        return file.isFile && file.length() > 0L
+    }
+
     suspend fun setCustom(songId: Long, uri: Uri) = withContext(Dispatchers.IO) {
+        val bytes = context.contentResolver.openInputStream(uri)?.use { source ->
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            while (true) {
+                val read = source.read(buffer)
+                if (read < 0) break
+                output.write(buffer, 0, read)
+                require(output.size() <= 6_000_000) { "Imagen demasiado grande" }
+            }
+            output.toByteArray()
+        } ?: error("No se puede leer la imagen")
+        setCustomBytes(songId, bytes)
+    }
+
+    suspend fun setCustomBytes(songId: Long, bytes: ByteArray) = withContext(Dispatchers.IO) {
+        require(bytes.size <= 6_000_000) { "Imagen demasiado grande" }
         fileMutex.withLock {
-            val bytes = context.contentResolver.openInputStream(uri)?.use { source ->
-                val output = ByteArrayOutputStream()
-                val buffer = ByteArray(8192)
-                while (true) {
-                    val read = source.read(buffer)
-                    if (read < 0) break
-                    output.write(buffer, 0, read)
-                    require(output.size() <= 6_000_000) { "Imagen demasiado grande" }
-                }
-                output.toByteArray()
-            } ?: error("No se puede leer la imagen")
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
             require(bounds.outWidth in 1..8000 && bounds.outHeight in 1..8000) { "Imagen no válida" }
             val sample = sampleSize(bounds.outWidth, bounds.outHeight, 1200)
-            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size,
-                BitmapFactory.Options().apply { inSampleSize = sample }) ?: error("No se pudo decodificar")
+            val bitmap = BitmapFactory.decodeByteArray(
+                bytes, 0, bytes.size,
+                BitmapFactory.Options().apply { inSampleSize = sample }
+            ) ?: error("No se pudo decodificar")
             try {
                 val destination = File(customDirectory, "$songId.jpg")
                 val temp = File(customDirectory, "$songId.part")
                 try {
                     temp.outputStream().use { out ->
-                        check(bitmap.compress(Bitmap.CompressFormat.JPEG, 88, out))
+                        check(bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out))
                     }
                     if (!temp.renameTo(destination)) temp.copyTo(destination, overwrite = true)
-                } finally { temp.delete() }
+                } finally {
+                    temp.delete()
+                }
                 _version.value += 1
-            } finally { bitmap.recycle() }
+            } finally {
+                bitmap.recycle()
+            }
         }
+    }
+
+    suspend fun fetchAndSaveHdCover(song: SongEntity, overwriteCustom: Boolean = false): Boolean = withContext(Dispatchers.IO) {
+        if (!overwriteCustom && hasCustom(song.id)) return@withContext false
+        val artistClean = song.artistDisplay.takeUnless {
+            it.isBlank() || it.equals("<unknown>", ignoreCase = true) || it.equals("Desconocido", ignoreCase = true)
+        }.orEmpty()
+        val query = listOf(artistClean, song.title).filter { it.isNotBlank() }.joinToString(" ").trim()
+        if (query.isBlank()) return@withContext false
+
+        val candidates = HdCoverSearcher.search(query)
+        for (candidate in candidates.take(4)) {
+            val bytes = HdCoverSearcher.downloadBytes(candidate.hdUrl) ?: continue
+            val saved = runCatching { setCustomBytes(song.id, bytes); true }.getOrDefault(false)
+            if (saved) return@withContext true
+        }
+        false
     }
 
     suspend fun clearCustom(songId: Long) = withContext(Dispatchers.IO) {
@@ -72,7 +100,6 @@ class ArtworkRepository(private val context: Context) {
             _version.value += 1
         }
     }
-
 
     suspend fun fileFor(song: SongEntity): File? = withContext(Dispatchers.IO) {
         fileMutex.withLock { coverFile(song) }
@@ -105,8 +132,6 @@ class ArtworkRepository(private val context: Context) {
 
         val embedded = embeddedBitmap(song)
         val artwork = embedded?.let { bitmap ->
-            // Some tagged songs store a small landscape cover inside a square image
-            // with large, uniform borders. Trim only clearly detected top/bottom bands.
             val trimmed = trimStrongLetterbox(bitmap)
             if (trimmed !== bitmap) bitmap.recycle()
             trimmed
@@ -151,12 +176,6 @@ class ArtworkRepository(private val context: Context) {
         return file.takeIf { it.length() in 1..2_000_000L }
     }
 
-    /**
-     * Avoid the tiny-centered-cover problem when tags include large uniform bands.
-     * This deliberately requires both bands to be substantial: dark album artwork
-     * must not be cropped just because the corners are black.
-     * Runs during disk-cache creation (IO), never during Compose drawing.
-     */
     private fun trimStrongLetterbox(source: Bitmap): Bitmap {
         val width = source.width
         val height = source.height
@@ -179,6 +198,7 @@ class ArtworkRepository(private val context: Context) {
             }
             return true
         }
+
         val maxMargin = (height * 0.36f).toInt()
         val stride = maxOf(1, height / 140)
         var top = 0
@@ -187,7 +207,6 @@ class ArtworkRepository(private val context: Context) {
         while (bottom > height - 1 - maxMargin && isUniformRow(bottom)) bottom -= stride
         val topRatio = top.toFloat() / height
         val bottomRatio = (height - 1 - bottom).toFloat() / height
-        // Only remove the classic wide horizontal bars, not ordinary album shadows.
         if (topRatio < 0.15f || bottomRatio < 0.15f) return source
         val contentHeight = bottom - top + 1
         if (contentHeight < height * 0.36f) return source

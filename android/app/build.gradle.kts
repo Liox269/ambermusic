@@ -12,9 +12,12 @@ android {
         applicationId = "dev.liox.ambermusic"
         minSdk = 31
         targetSdk = 35
-        versionCode = 280
-        versionName = "2.8.0-beta7"
+        versionCode = 290
+        versionName = "2.9.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildFeatures {
@@ -71,6 +74,9 @@ dependencies {
     implementation(libs.coroutines.android)
     implementation(libs.coil.compose)
     implementation(libs.palette.ktx)
+
+    implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
+    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
 
     testImplementation(libs.junit)
 }

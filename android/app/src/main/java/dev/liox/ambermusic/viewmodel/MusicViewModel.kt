@@ -17,6 +17,11 @@ import dev.liox.ambermusic.backup.LibraryBackup
 import dev.liox.ambermusic.settings.AmberSettings
 import dev.liox.ambermusic.profiles.ProfileStore
 import dev.liox.ambermusic.artwork.ArtworkRepository
+import dev.liox.ambermusic.artwork.HdCoverCandidate
+import dev.liox.ambermusic.artwork.HdCoverSearcher
+import dev.liox.ambermusic.download.DownloadAudioFormat
+import dev.liox.ambermusic.download.UrlMusicDownloader
+import kotlinx.coroutines.Job
 import android.net.Uri
 import dev.liox.ambermusic.playlists.M3uCodec
 import dev.liox.ambermusic.playlists.LocalTrackPath
@@ -53,7 +58,8 @@ class MusicViewModel(
     private val artwork: ArtworkRepository,
     private val smartStore: SmartPlaylistStore,
     private val duplicateFinder: DuplicateFinder,
-    private val profiles: ProfileStore
+    private val profiles: ProfileStore,
+    private val downloader: UrlMusicDownloader
 ) : ViewModel() {
     val smartPlaylists = smartStore.rules
     val hiddenDuplicates: StateFlow<Set<String>> = settings.hiddenDuplicateUris
@@ -603,6 +609,130 @@ class MusicViewModel(
     fun clearCustomArtwork() {
         val song = playerUiState.value.song ?: return
         viewModelScope.launch { artwork.clearCustom(song.id) }
+    }
+
+
+    private val _urlDownloading = MutableStateFlow(false)
+    val urlDownloading: StateFlow<Boolean> = _urlDownloading
+    private val _urlDownloadProgress = MutableStateFlow(0f)
+    val urlDownloadProgress: StateFlow<Float> = _urlDownloadProgress
+    private val _urlDownloadStatus = MutableStateFlow<String?>(null)
+    val urlDownloadStatus: StateFlow<String?> = _urlDownloadStatus
+
+    private val _bulkSyncRunning = MutableStateFlow(false)
+    val bulkSyncRunning: StateFlow<Boolean> = _bulkSyncRunning
+    private val _bulkSyncProgress = MutableStateFlow(0f)
+    val bulkSyncProgress: StateFlow<Float> = _bulkSyncProgress
+    private val _bulkSyncStatus = MutableStateFlow<String?>(null)
+    val bulkSyncStatus: StateFlow<String?> = _bulkSyncStatus
+    private var bulkSyncJob: Job? = null
+
+    private val _hdCoverCandidates = MutableStateFlow<List<HdCoverCandidate>>(emptyList())
+    val hdCoverCandidates: StateFlow<List<HdCoverCandidate>> = _hdCoverCandidates
+    private val _hdCoverSearching = MutableStateFlow(false)
+    val hdCoverSearching: StateFlow<Boolean> = _hdCoverSearching
+
+    fun downloadFromUrl(input: String, format: DownloadAudioFormat) {
+        if (_urlDownloading.value) return
+        viewModelScope.launch {
+            _urlDownloading.value = true
+            _urlDownloadProgress.value = 0.02f
+            _urlDownloadStatus.value = "Preparando descarga…"
+            try {
+                val res = downloader.download(input, format) { progress, status ->
+                    _urlDownloadProgress.value = progress
+                    _urlDownloadStatus.value = status
+                }
+                _urlDownloadStatus.value = "Escaneando biblioteca y buscando portada HD + letra…"
+                withContext(Dispatchers.IO) { scanner.scan() }
+                val match = libraryUiState.value.songs.firstOrNull {
+                    it.displayName.equals(res.displayName, ignoreCase = true) ||
+                        it.title.contains(res.title, ignoreCase = true)
+                }
+                if (match != null) {
+                    runCatching { artwork.fetchAndSaveHdCover(match, overwriteCustom = true) }
+                    val gotLyrics = runCatching {
+                        lyrics.fetchFromLrclib(match.id, match.title, match.artistDisplay, match.albumTitle, match.durationMs)
+                    }.getOrDefault(false)
+                    if (gotLyrics) lyricsRevision.value += 1
+                }
+                _urlDownloadProgress.value = 1f
+                _urlDownloadStatus.value = "Listo: ${res.title} (${res.format.label})"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _urlDownloadStatus.value = "Error: ${e.localizedMessage ?: "no se pudo descargar"}"
+            } finally {
+                _urlDownloading.value = false
+            }
+        }
+    }
+
+    fun syncAllCoversAndLyrics(overwriteExistingCovers: Boolean) {
+        if (_bulkSyncRunning.value) return
+        val songs = libraryUiState.value.songs
+        if (songs.isEmpty()) return
+        bulkSyncJob = viewModelScope.launch(Dispatchers.IO) {
+            _bulkSyncRunning.value = true
+            _bulkSyncProgress.value = 0f
+            var coversOk = 0
+            var lyricsOk = 0
+            try {
+                songs.forEachIndexed { idx, song ->
+                    _bulkSyncStatus.value = "Procesando ${idx + 1}/${songs.size}: ${song.title}"
+                    if (runCatching { artwork.fetchAndSaveHdCover(song, overwriteExistingCovers) }.getOrDefault(false)) {
+                        coversOk++
+                    }
+                    if (!lyrics.hasLyrics(song.id)) {
+                        if (runCatching {
+                                lyrics.fetchFromLrclib(song.id, song.title, song.artistDisplay, song.albumTitle, song.durationMs)
+                            }.getOrDefault(false)) {
+                            lyricsOk++
+                        }
+                    }
+                    _bulkSyncProgress.value = (idx + 1).toFloat() / songs.size.toFloat()
+                }
+                if (lyricsOk > 0) lyricsRevision.value += 1
+                _bulkSyncStatus.value = "Completado · Portadas HD: $coversOk · Letras: $lyricsOk"
+            } catch (e: CancellationException) {
+                _bulkSyncStatus.value = "Cancelado · Portadas HD: $coversOk · Letras: $lyricsOk"
+                throw e
+            } finally {
+                _bulkSyncRunning.value = false
+            }
+        }
+    }
+
+    fun cancelBulkSync() {
+        bulkSyncJob?.cancel()
+        bulkSyncJob = null
+    }
+
+    fun searchHdCovers(query: String) {
+        viewModelScope.launch {
+            _hdCoverSearching.value = true
+            try {
+                _hdCoverCandidates.value = HdCoverSearcher.search(query)
+            } finally {
+                _hdCoverSearching.value = false
+            }
+        }
+    }
+
+    fun applyHdCoverToCurrent(candidate: HdCoverCandidate, onDone: (String) -> Unit) {
+        val song = playerUiState.value.song
+        if (song == null) {
+            onDone("Reproduce una canción primero para aplicarle la portada")
+            return
+        }
+        viewModelScope.launch {
+            val ok = runCatching {
+                val bytes = HdCoverSearcher.downloadBytes(candidate.hdUrl) ?: error("No se pudo descargar la imagen")
+                artwork.setCustomBytes(song.id, bytes)
+                true
+            }.getOrDefault(false)
+            onDone(if (ok) "Portada HD aplicada desde ${candidate.source}" else "No se pudo aplicar la portada")
+        }
     }
 
 }

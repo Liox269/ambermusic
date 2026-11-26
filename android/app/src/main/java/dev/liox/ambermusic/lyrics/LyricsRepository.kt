@@ -2,41 +2,47 @@ package dev.liox.ambermusic.lyrics
 
 import android.content.Context
 import android.net.Uri
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.ByteArrayOutputStream
-import java.net.URL
-import javax.net.ssl.HttpsURLConnection
-import org.json.JSONObject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import javax.net.ssl.HttpsURLConnection
 
-/** User imports an LRC/text file using the system document picker. No storage permission needed. */
 class LyricsRepository(private val context: Context) {
     private val directory by lazy { File(context.filesDir, "lyrics").apply { mkdirs() } }
     private val autoSearch = context.getSharedPreferences("amber_lyrics_auto", Context.MODE_PRIVATE)
     private val searchMutex = Mutex()
+    private val offsets = context.getSharedPreferences("amber_lrc_offsets", Context.MODE_PRIVATE)
 
-    /**
-     * One lookup for a newly played uncached song. Failed searches are cached for a day,
-     * connectivity/server failures for 15 minutes. User-triggered searches bypass the cache.
-     */
+    fun hasLyrics(songId: Long): Boolean {
+        val file = File(directory, "$songId.lrc")
+        return file.isFile && file.length() in 1..(512 * 1024)
+    }
+
     suspend fun autoFetchFromLrclib(
         songId: Long, title: String, artist: String, album: String,
         durationMs: Long, modifiedAtSeconds: Long
     ): Boolean = withContext(Dispatchers.IO) {
-        if (File(directory, "$songId.lrc").isFile) return@withContext false
-        if (title.isBlank() || artist.isBlank()) return@withContext false
+        if (hasLyrics(songId)) return@withContext false
+        if (title.isBlank()) return@withContext false
         val key = "track_${songId}_${modifiedAtSeconds}"
         val now = System.currentTimeMillis()
         if (now < autoSearch.getLong(key, 0L)) return@withContext false
         searchMutex.withLock {
             currentCoroutineContext().ensureActive()
-            if (File(directory, "$songId.lrc").isFile) return@withLock false
+            if (hasLyrics(songId)) return@withLock false
             if (System.currentTimeMillis() < autoSearch.getLong(key, 0L)) return@withLock false
             try {
                 val found = fetchFromLrclib(songId, title, artist, album, durationMs)
@@ -44,7 +50,7 @@ class LyricsRepository(private val context: Context) {
                 found
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (failure: Exception) {
+            } catch (_: Exception) {
                 autoSearch.edit().putLong(key, System.currentTimeMillis() + 15L * 60L * 1000L).apply()
                 false
             }
@@ -68,12 +74,7 @@ class LyricsRepository(private val context: Context) {
         val text = bytes.toString(Charsets.UTF_8).removePrefix("\uFEFF")
         val lines = parseLrc(text)
         require(lines.isNotEmpty()) { "No se encontraron letras" }
-        val dest = File(directory, "$songId.lrc")
-        val temp = File(directory, "$songId.part")
-        try {
-            temp.writeText(text, Charsets.UTF_8)
-            check(temp.renameTo(dest) || run { temp.copyTo(dest, overwrite = true); true })
-        } finally { temp.delete() }
+        writeLyricsAtomically(songId, text)
         lines.size
     }
 
@@ -83,62 +84,172 @@ class LyricsRepository(private val context: Context) {
         else parseLrc(file.readText(Charsets.UTF_8))
     }
 
-    /** One-song lookup, used automatically on playback or explicitly from the Lyrics menu. */
+    /** Multi-source lookup ported from AmberMusix PC: LRCLIB exact -> LRCLIB Search + NetEase -> Lyrics.ovh */
     suspend fun fetchFromLrclib(
         songId: Long, title: String, artist: String, album: String, durationMs: Long
     ): Boolean = withContext(Dispatchers.IO) {
-        val target = File(directory, "$songId.lrc")
-        if (target.isFile) return@withContext false
-        require(title.isNotBlank() && artist.isNotBlank()) { "Falta título o artista para buscar letras" }
+        if (hasLyrics(songId)) return@withContext false
+        require(title.isNotBlank()) { "Falta título para buscar letras" }
+
+        val cleanArtist = cleanSearchTerm(artist).takeUnless {
+            it.equals("unknown", ignoreCase = true) || it.equals("desconocido", ignoreCase = true)
+        }.orEmpty()
+        val cleanTitle = cleanSearchTerm(title).ifBlank { title.trim() }
+
+        // 1. LRCLIB exact match
+        if (artist.isNotBlank()) {
+            val exact = runCatching { queryLrclibExact(title, artist, album, durationMs) }.getOrNull()
+            if (!exact.isNullOrBlank() && saveCandidate(songId, exact)) return@withContext true
+        }
+
+        // 2. Parallel LRCLIB search + NetEase (title + artist, then title only), preferring synced LRC
+        val queries = buildList {
+            if (cleanArtist.isNotBlank()) add("$cleanTitle $cleanArtist")
+            add(cleanTitle)
+        }.distinct()
+
+        for (query in queries) {
+            currentCoroutineContext().ensureActive()
+            val candidate = searchParallelSources(query)
+            if (!candidate.isNullOrBlank() && saveCandidate(songId, candidate)) return@withContext true
+        }
+
+        // 3. Final fallback: Lyrics.ovh
+        if (cleanArtist.isNotBlank()) {
+            currentCoroutineContext().ensureActive()
+            val ovh = runCatching { queryLyricsOvh(cleanArtist, cleanTitle) }.getOrNull()
+            if (!ovh.isNullOrBlank() && saveCandidate(songId, ovh)) return@withContext true
+        }
+
+        false
+    }
+
+    private suspend fun searchParallelSources(query: String): String? = coroutineScope {
+        val lrclib = async { runCatching { queryLrclibSearch(query) }.getOrNull() }
+        val netease = async { runCatching { queryNetEase(query) }.getOrNull() }
+        val results = listOfNotNull(lrclib.await(), netease.await())
+        results.firstOrNull { isSyncedLrc(it) } ?: results.firstOrNull()
+    }
+
+    private fun isSyncedLrc(text: String): Boolean =
+        text.contains("[") && text.contains(":") && text.contains("]") &&
+            parseLrc(text).any { it.timeMs >= 0L }
+
+    private fun queryLrclibExact(title: String, artist: String, album: String, durationMs: Long): String? {
         val builder = Uri.parse("https://lrclib.net/api/get").buildUpon()
             .appendQueryParameter("track_name", title.take(160))
             .appendQueryParameter("artist_name", artist.take(160))
         if (album.isNotBlank()) builder.appendQueryParameter("album_name", album.take(160))
         if (durationMs in 1000L..3_600_000L) builder.appendQueryParameter("duration", (durationMs / 1000L).toString())
-        val connection = (URL(builder.build().toString()).openConnection() as HttpsURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 4500
-            readTimeout = 6000
-            setRequestProperty("User-Agent", "AmberMusic/2.3.0 (https://github.com/Liox269/ambermusic)")
-            setRequestProperty("Accept", "application/json")
-        }
-        try {
-            when (val status = connection.responseCode) {
-                404 -> return@withContext false
-                429 -> throw IllegalStateException("LRCLIB limitó las consultas. Inténtalo más tarde.")
-                200 -> Unit
-                else -> throw IllegalStateException("LRCLIB respondió HTTP $status")
-            }
-            val output = ByteArrayOutputStream()
-            connection.inputStream.use { stream ->
-                val buffer = ByteArray(8192)
-                while (true) {
-                    val count = stream.read(buffer)
-                    if (count < 0) break
-                    output.write(buffer, 0, count)
-                    require(output.size() <= 512 * 1024) { "Respuesta de LRCLIB demasiado grande" }
-                }
-            }
-            currentCoroutineContext().ensureActive()
-            val data = JSONObject(output.toString(Charsets.UTF_8.name()))
-            if (data.optBoolean("instrumental", false)) return@withContext false
-            val lrc = data.optString("syncedLyrics").takeUnless { it.isBlank() || it == "null" }
-                ?: data.optString("plainLyrics").takeUnless { it.isBlank() || it == "null" }
-                ?: return@withContext false
-            if (parseLrc(lrc).isEmpty()) return@withContext false
-            if (target.isFile) return@withContext false // Keep manual/imported lyrics.
-            currentCoroutineContext().ensureActive()
-            val tmp = File(directory, "$songId.lrclib.part")
-            try {
-                tmp.writeText(lrc, Charsets.UTF_8)
-                currentCoroutineContext().ensureActive()
-                check(tmp.renameTo(target) || run { tmp.copyTo(target, overwrite = true); true })
-            } finally { tmp.delete() }
-            true
-        } finally { connection.disconnect() }
+        val raw = httpGet(builder.build().toString()) ?: return null
+        val data = JSONObject(raw)
+        if (data.optBoolean("instrumental", false)) return null
+        return data.optString("syncedLyrics").takeUnless { it.isBlank() || it == "null" }
+            ?: data.optString("plainLyrics").takeUnless { it.isBlank() || it == "null" }
     }
 
-    private val offsets = context.getSharedPreferences("amber_lrc_offsets", Context.MODE_PRIVATE)
+    private fun queryLrclibSearch(query: String): String? {
+        val url = Uri.parse("https://lrclib.net/api/search").buildUpon()
+            .appendQueryParameter("q", query.take(180))
+            .build().toString()
+        val raw = httpGet(url) ?: return null
+        val arr = JSONArray(raw)
+        var plainFallback: String? = null
+        for (i in 0 until minOf(arr.length(), 8)) {
+            val item = arr.optJSONObject(i) ?: continue
+            if (item.optBoolean("instrumental", false)) continue
+            val synced = item.optString("syncedLyrics").takeUnless { it.isBlank() || it == "null" }
+            if (synced != null && isSyncedLrc(synced)) return synced
+            if (plainFallback == null) {
+                plainFallback = item.optString("plainLyrics").takeUnless { it.isBlank() || it == "null" }
+            }
+        }
+        return plainFallback
+    }
+
+    private fun queryNetEase(query: String): String? {
+        val searchUrl = Uri.parse("https://music.163.com/api/search/get").buildUpon()
+            .appendQueryParameter("s", query.take(160))
+            .appendQueryParameter("type", "1")
+            .appendQueryParameter("limit", "5")
+            .build().toString()
+        val rawSearch = httpGet(searchUrl, referer = "https://music.163.com/") ?: return null
+        val songs = JSONObject(rawSearch).optJSONObject("result")?.optJSONArray("songs") ?: return null
+        var plainFallback: String? = null
+        for (i in 0 until minOf(songs.length(), 4)) {
+            val id = songs.optJSONObject(i)?.optLong("id", -1L) ?: -1L
+            if (id <= 0L) continue
+            val lyricUrl = "https://music.163.com/api/song/lyric?id=$id&lv=1"
+            val rawLyric = httpGet(lyricUrl, referer = "https://music.163.com/") ?: continue
+            val lrc = JSONObject(rawLyric).optJSONObject("lrc")?.optString("lyric")
+                ?.takeUnless { it.isBlank() || it == "null" } ?: continue
+            if (isSyncedLrc(lrc)) return lrc
+            if (plainFallback == null) plainFallback = lrc
+        }
+        return plainFallback
+    }
+
+    private fun queryLyricsOvh(artist: String, title: String): String? {
+        val a = URLEncoder.encode(artist.take(120), "UTF-8").replace("+", "%20")
+        val t = URLEncoder.encode(title.take(120), "UTF-8").replace("+", "%20")
+        val raw = httpGet("https://api.lyrics.ovh/v1/$a/$t", readTimeoutMs = 6000) ?: return null
+        return JSONObject(raw).optString("lyrics").takeUnless { it.isBlank() || it == "null" }
+    }
+
+    private fun httpGet(url: String, referer: String? = null, readTimeoutMs: Int = 7000): String? {
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            instanceFollowRedirects = true
+            connectTimeout = 4500
+            readTimeout = readTimeoutMs
+            setRequestProperty("User-Agent", "AmberMusic/2.9.0 (https://github.com/Liox269/ambermusic)")
+            setRequestProperty("Accept", "application/json")
+            if (referer != null) setRequestProperty("Referer", referer)
+        }
+        return try {
+            if (conn.responseCode != 200) return null
+            val out = ByteArrayOutputStream()
+            conn.inputStream.use { stream ->
+                val buf = ByteArray(8192)
+                while (true) {
+                    val read = stream.read(buf)
+                    if (read < 0) break
+                    out.write(buf, 0, read)
+                    if (out.size() > 512 * 1024) break
+                }
+            }
+            out.toString(Charsets.UTF_8.name())
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun saveCandidate(songId: Long, lrc: String): Boolean {
+        if (parseLrc(lrc).isEmpty()) return false
+        if (hasLyrics(songId)) return false
+        writeLyricsAtomically(songId, lrc)
+        return true
+    }
+
+    private fun writeLyricsAtomically(songId: Long, text: String) {
+        val dest = File(directory, "$songId.lrc")
+        val tmp = File(directory, "$songId.part")
+        try {
+            tmp.writeText(text, Charsets.UTF_8)
+            check(tmp.renameTo(dest) || run { tmp.copyTo(dest, overwrite = true); true })
+        } finally {
+            tmp.delete()
+        }
+    }
+
+    fun cleanSearchTerm(raw: String): String = raw
+        .substringBefore("//")
+        .replace(Regex("\([^)]*\)"), " ")
+        .replace(Regex("\[[^\]]*\]"), " ")
+        .replace(Regex("\s*-\s*Remastered.*$", RegexOption.IGNORE_CASE), "")
+        .replace(Regex("\b(feat\.?|ft\.?)\b.*$", RegexOption.IGNORE_CASE), "")
+        .replace(Regex("\s+"), " ")
+        .trim()
 
     fun getOffsetMs(songId: Long): Long = offsets.getLong("offset_$songId", 0L)
 
@@ -154,12 +265,7 @@ class LyricsRepository(private val context: Context) {
     suspend fun saveEdited(songId: Long, text: String) = withContext(Dispatchers.IO) {
         require(text.toByteArray(Charsets.UTF_8).size < 512 * 1024) { "Letras demasiado largas" }
         require(parseLrc(text).isNotEmpty()) { "El contenido no contiene letras" }
-        val file = File(directory, "$songId.lrc")
-        val tmp = File(directory, "$songId.edit")
-        try {
-            tmp.writeText(text, Charsets.UTF_8)
-            if (!tmp.renameTo(file)) { tmp.copyTo(file, true); tmp.delete() }
-        } finally { tmp.delete() }
+        writeLyricsAtomically(songId, text)
     }
 
     suspend fun clear(songId: Long) = withContext(Dispatchers.IO) {
@@ -170,7 +276,7 @@ class LyricsRepository(private val context: Context) {
 data class LyricLine(val timeMs: Long, val text: String)
 
 fun parseLrc(content: String): List<LyricLine> {
-    val timestamps = Regex("\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?\\]")
+    val timestamps = Regex("\\[(\\d{1,3}):(\\d{2})(?:[:.](\\d{1,3}))?\\]")
     val output = ArrayList<LyricLine>()
     val plain = ArrayList<String>()
     content.lineSequence().forEach { original ->
