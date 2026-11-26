@@ -60,6 +60,7 @@ class LocalMusicScanner(
             val scanPrefs = context.getSharedPreferences("amber_scanner", Context.MODE_PRIVATE)
             val refreshGenreOnce = !scanPrefs.getBoolean("genres_indexed", false)
             val refreshTracksOnce = !scanPrefs.getBoolean("track_numbers_indexed_v5", false)
+            val refreshQualityOnce = !scanPrefs.getBoolean("quality_indexed_v150", false)
             val projection = arrayOf(
                 MediaStore.Audio.Media._ID,
                 MediaStore.MediaColumns.DISPLAY_NAME,
@@ -70,6 +71,7 @@ class LocalMusicScanner(
                 MediaStore.Audio.AudioColumns.DURATION,
                 MediaStore.MediaColumns.SIZE,
                 MediaStore.MediaColumns.DATE_MODIFIED,
+                MediaStore.MediaColumns.DATE_ADDED,
                 MediaStore.MediaColumns.RELATIVE_PATH,
                 MediaStore.MediaColumns.MIME_TYPE
             )
@@ -104,11 +106,11 @@ class LocalMusicScanner(
                             existing.modifiedAtSeconds == file.modifiedAtSeconds &&
                             existing.sizeBytes == file.sizeBytes
                         ) continue
-                        if (!refreshGenreOnce && !refreshTracksOnce && existing != null && existing.contentUri == contentUri.toString() &&
+                        if (!refreshGenreOnce && !refreshTracksOnce && !refreshQualityOnce && existing != null && existing.contentUri == contentUri.toString() &&
                             existing.modifiedAtSeconds == file.modifiedAtSeconds &&
                             existing.sizeBytes == file.sizeBytes
                         ) {
-                            dao.markSongSeen(file.id, token)
+                            dao.markSongSeenWithDate(file.id, token, file.dateAddedSeconds)
                             unchanged++
                             continue
                         }
@@ -148,6 +150,9 @@ class LocalMusicScanner(
                                 durationMs = confirmedDurationMs,
                                 sizeBytes = file.sizeBytes,
                                 modifiedAtSeconds = file.modifiedAtSeconds,
+                                dateAddedSeconds = file.dateAddedSeconds,
+                                codecMime = technical.codecMime,
+                                channelCount = technical.channelCount,
                                 mimeType = file.mime,
                                 format = technical.format,
                                 bitrateBps = technical.bitrateBps,
@@ -179,6 +184,7 @@ class LocalMusicScanner(
             if (errors == 0) scanPrefs.edit()
                 .putBoolean("genres_indexed", true)
                 .putBoolean("track_numbers_indexed_v5", true)
+                .putBoolean("quality_indexed_v150", true)
                 .apply()
             ScanReport(changed, unchanged, unsupported, errors, removed, errors == 0)
         }
@@ -225,6 +231,7 @@ class LocalMusicScanner(
         val durationMs: Long,
         val sizeBytes: Long,
         val modifiedAtSeconds: Long,
+        val dateAddedSeconds: Long,
         val folderPath: String,
         val mime: String?
     )
@@ -239,6 +246,7 @@ class LocalMusicScanner(
         private val duration = cursor.getColumnIndexOrThrow(MediaStore.Audio.AudioColumns.DURATION)
         private val size = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
         private val modified = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
+        private val added = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
         private val folder = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
         private val mime = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
 
@@ -252,6 +260,7 @@ class LocalMusicScanner(
             durationMs = cursor.longAt(duration),
             sizeBytes = cursor.longAt(size),
             modifiedAtSeconds = cursor.longAt(modified),
+            dateAddedSeconds = cursor.longAt(added),
             folderPath = cursor.stringAt(folder).orEmpty(),
             mime = cursor.stringAt(mime)
         )

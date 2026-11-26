@@ -97,14 +97,20 @@ class ArtworkRepository(private val context: Context) {
     private fun coverFile(song: SongEntity): File? {
         val chosen = File(customDirectory, "${song.id}.jpg")
         if (chosen.isFile && chosen.length() > 0L) return chosen
-        val key = "${song.id}_${song.modifiedAtSeconds}_${song.albumId ?: 0L}"
+        val key = "${song.id}_${song.modifiedAtSeconds}_${song.albumId ?: 0L}_art2"
         val file = File(directory, "$key.jpg")
         if (file.exists() && file.length() in 1..2_000_000L) return file
         if (key in unavailable) return null
         if (file.exists()) file.delete()
 
         val embedded = embeddedBitmap(song)
-        val artwork = embedded ?: albumBitmap(song)
+        val artwork = embedded?.let { bitmap ->
+            // Some tagged songs store a small landscape cover inside a square image
+            // with large, uniform borders. Trim only clearly detected top/bottom bands.
+            val trimmed = trimStrongLetterbox(bitmap)
+            if (trimmed !== bitmap) bitmap.recycle()
+            trimmed
+        } ?: albumBitmap(song)
         if (artwork == null) {
             unavailable.add(key)
             return null
@@ -143,6 +149,50 @@ class ArtworkRepository(private val context: Context) {
             artwork.recycle()
         }
         return file.takeIf { it.length() in 1..2_000_000L }
+    }
+
+    /**
+     * Avoid the tiny-centered-cover problem when tags include large uniform bands.
+     * This deliberately requires both bands to be substantial: dark album artwork
+     * must not be cropped just because the corners are black.
+     * Runs during disk-cache creation (IO), never during Compose drawing.
+     */
+    private fun trimStrongLetterbox(source: Bitmap): Bitmap {
+        val width = source.width
+        val height = source.height
+        if (width < 160 || height < 160) return source
+        val reference = source.getPixel(0, 0)
+        fun maxDistance(other: Int): Int = maxOf(
+            kotlin.math.abs(android.graphics.Color.red(reference) - android.graphics.Color.red(other)),
+            kotlin.math.abs(android.graphics.Color.green(reference) - android.graphics.Color.green(other)),
+            kotlin.math.abs(android.graphics.Color.blue(reference) - android.graphics.Color.blue(other))
+        )
+        if (listOf(
+                source.getPixel(width - 1, 0), source.getPixel(0, height - 1),
+                source.getPixel(width - 1, height - 1)
+            ).any { maxDistance(it) > 34 }) return source
+
+        fun isUniformRow(y: Int): Boolean {
+            for (index in 0..24) {
+                val x = index * (width - 1) / 24
+                if (maxDistance(source.getPixel(x, y)) > 46) return false
+            }
+            return true
+        }
+        val maxMargin = (height * 0.36f).toInt()
+        val stride = maxOf(1, height / 140)
+        var top = 0
+        while (top < maxMargin && isUniformRow(top)) top += stride
+        var bottom = height - 1
+        while (bottom > height - 1 - maxMargin && isUniformRow(bottom)) bottom -= stride
+        val topRatio = top.toFloat() / height
+        val bottomRatio = (height - 1 - bottom).toFloat() / height
+        // Only remove the classic wide horizontal bars, not ordinary album shadows.
+        if (topRatio < 0.15f || bottomRatio < 0.15f) return source
+        val contentHeight = bottom - top + 1
+        if (contentHeight < height * 0.36f) return source
+        return try { Bitmap.createBitmap(source, 0, top.coerceAtLeast(0), width, contentHeight) }
+        catch (_: Exception) { source }
     }
 
     private fun embeddedBitmap(song: SongEntity): Bitmap? {

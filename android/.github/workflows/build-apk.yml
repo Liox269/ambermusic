@@ -1,42 +1,68 @@
-name: Construir APK AmberMusic desde celular
+name: Compilar AmberMusic v1.5.0
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'AmberMusic_v1.3.0_Source.zip'
-      - '.github/workflows/build-apk.yml'
+      - 'AmberMusic_v1.5.0_HiFi_Orden_Source.zip'
 
 permissions:
   contents: read
 
 jobs:
-  apk:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 55
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Obtener archivos
+        uses: actions/checkout@v4
+      - name: Preparar Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
-      - name: Instalar SDK Android
+      - name: Usar Android SDK del ejecutor
+        shell: bash
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager 'platforms;android-37' 'build-tools;36.0.0' 'platform-tools'
-      - uses: gradle/actions/setup-gradle@v4
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager || true)"; fi
+          test -n "$SDKMANAGER" && test -x "$SDKMANAGER"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" 'platforms;android-37.0' 'build-tools;36.0.0' 'platform-tools'
+      - name: Preparar Gradle 9.6
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.6.0'
-      - name: Extraer el proyecto
-        run: unzip -q AmberMusic_v1.3.0_Source.zip -d workspace
-      - name: Compilar APK de depuración
-        working-directory: workspace/AmberMusic-Completo
-        run: gradle :app:assembleDebug --no-daemon --stacktrace
-      - name: Preparar nombre de APK
-        run: cp workspace/AmberMusic-Completo/app/build/outputs/apk/debug/app-debug.apk AmberMusic-v1.3.0-debug.apk
-      - uses: actions/upload-artifact@v4
+      - name: Extraer y encontrar proyecto
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_ZIP=AmberMusic_v1.5.0_HiFi_Orden_Source.zip
+          if [ ! -f "$SOURCE_ZIP" ]; then
+            echo "::error::Falta $SOURCE_ZIP en la raíz del repositorio"
+            ls -la
+            exit 1
+          fi
+          unzip -q "$SOURCE_ZIP" -d workspace
+          PROJECT_SETTINGS="$(find workspace -name settings.gradle.kts -type f -print -quit)"
+          test -n "$PROJECT_SETTINGS"
+          echo "PROJECT_DIR=$(dirname "$PROJECT_SETTINGS")" >> "$GITHUB_ENV"
+      - name: Probar y compilar APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon --stacktrace
+      - name: Preparar APK descargable
+        shell: bash
+        run: cp "$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk" AmberMusic-v1.5.0-debug.apk
+      - name: Publicar APK
+        uses: actions/upload-artifact@v4
         with:
-          name: AmberMusic-v1.3.0-APK
-          path: AmberMusic-v1.3.0-debug.apk
+          name: AmberMusic-v1.5.0-APK
+          path: AmberMusic-v1.5.0-debug.apk
+          if-no-files-found: error
           retention-days: 30
