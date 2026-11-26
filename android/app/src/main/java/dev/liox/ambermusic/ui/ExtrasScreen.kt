@@ -182,7 +182,7 @@ fun ExtrasScreen(
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { if (tab in 5..15) tab = 4 else onBack() }) { Icon(Icons.Filled.ArrowBack, "Volver", tint = LocalAmberPalette.current.foreground) }
             Text(when (tab) {
-            16 -> PcToolsPanel(library = library, viewModel = viewModel) 4 -> "Ajustes"; 5 -> "Duplicados"; 6 -> "Biblioteca y carpetas"; 7 -> "Apariencia"; 8 -> "Inmersión visual"; 9 -> "Audio"; 10 -> "Apoyo opcional"; 11 -> "Reproducción"; 12 -> "Rendimiento"; 13 -> "Datos y respaldo"; 14 -> "Perfiles locales"; 15 -> "Mis temas"; else -> "AmberMusic" }, color = LocalAmberPalette.current.foreground, fontSize = 23.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            16 -> "Descargas y HD" 4 -> "Ajustes"; 5 -> "Duplicados"; 6 -> "Biblioteca y carpetas"; 7 -> "Apariencia"; 8 -> "Inmersión visual"; 9 -> "Audio"; 10 -> "Apoyo opcional"; 11 -> "Reproducción"; 12 -> "Rendimiento"; 13 -> "Datos y respaldo"; 14 -> "Perfiles locales"; 15 -> "Mis temas"; else -> "AmberMusic" }, color = LocalAmberPalette.current.foreground, fontSize = 23.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
 
         }
         if (tab in 0..3 || tab == 16) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),

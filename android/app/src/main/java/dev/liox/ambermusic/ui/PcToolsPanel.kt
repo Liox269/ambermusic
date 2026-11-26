@@ -46,7 +46,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import dev.liox.ambermusic.artwork.HdCoverSearcher
 import dev.liox.ambermusic.download.DownloadAudioFormat
 import dev.liox.ambermusic.viewmodel.LibraryUiState
 import dev.liox.ambermusic.viewmodel.MusicViewModel
@@ -244,14 +250,22 @@ fun PcToolsPanel(
                     .padding(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                AsyncImage(
-                    model = candidate.previewUrl,
-                    contentDescription = candidate.title,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(56.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                )
+                val thumb by produceState<ImageBitmap?>(null, candidate.previewUrl) {
+                    val bytes = HdCoverSearcher.downloadBytes(candidate.previewUrl)
+                    value = bytes?.let { runCatching { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }.getOrNull() }
+                }
+                if (thumb != null) {
+                    Image(
+                        bitmap = thumb!!,
+                        contentDescription = candidate.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp))
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)).background(Color.White.copy(alpha = 0.1f))
+                    )
+                }
                 Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(candidate.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)

@@ -244,11 +244,11 @@ class LyricsRepository(private val context: Context) {
 
     fun cleanSearchTerm(raw: String): String = raw
         .substringBefore("//")
-        .replace(Regex("\([^)]*\)"), " ")
-        .replace(Regex("\[[^\]]*\]"), " ")
-        .replace(Regex("\s*-\s*Remastered.*$", RegexOption.IGNORE_CASE), "")
-        .replace(Regex("\b(feat\.?|ft\.?)\b.*$", RegexOption.IGNORE_CASE), "")
-        .replace(Regex("\s+"), " ")
+        .replace(Regex("""\([^)]*\)"""), " ")
+        .replace(Regex("""\[[^\]]*\]"""), " ")
+        .replace(Regex("""\s*-\s*Remastered.*$""", RegexOption.IGNORE_CASE), "")
+        .replace(Regex("""\b(feat\.?|ft\.?)\b.*$""", RegexOption.IGNORE_CASE), "")
+        .replace(Regex("""\s+"""), " ")
         .trim()
 
     fun getOffsetMs(songId: Long): Long = offsets.getLong("offset_$songId", 0L)
